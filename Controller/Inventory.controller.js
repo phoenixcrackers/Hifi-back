@@ -60,6 +60,17 @@ exports.addGiftBoxProduct = async (req, res) => {
         )
       `;
       await pool.query(tableSchema);
+
+      // Create stock history table
+      const stockHistorySchema = `
+        CREATE TABLE IF NOT EXISTS public.gift_box_dealers_stock_history (
+          id SERIAL PRIMARY KEY,
+          product_id INTEGER NOT NULL REFERENCES public.${tableName}(id) ON DELETE CASCADE,
+          quantity_added INTEGER NOT NULL CHECK (quantity_added > 0),
+          added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+      await pool.query(stockHistorySchema);
     }
 
     const duplicateCheck = await pool.query(
@@ -273,5 +284,67 @@ exports.toggleGiftBoxProductStatus = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to toggle status' });
+  }
+};
+
+exports.addStock = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity } = req.body;
+
+    if (!quantity || quantity <= 0) {
+      return res.status(400).json({ message: 'Valid quantity is required' });
+    }
+
+    const product = await pool.query(
+      `SELECT stock FROM public.gift_box_dealers WHERE id = $1`,
+      [id]
+    );
+
+    if (product.rows.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    const currentStock = product.rows[0].stock;
+    const newStock = currentStock + parseInt(quantity);
+
+    await pool.query('BEGIN');
+
+    await pool.query(
+      `UPDATE public.gift_box_dealers SET stock = $1 WHERE id = $2`,
+      [newStock, id]
+    );
+
+    await pool.query(
+      `INSERT INTO public.gift_box_dealers_stock_history (product_id, quantity_added, added_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)`,
+      [id, parseInt(quantity)]
+    );
+
+    await pool.query('COMMIT');
+
+    res.status(200).json({ message: 'Stock added successfully', newStock });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ message: 'Failed to add stock' });
+  }
+};
+
+exports.getStockHistory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const query = `
+      SELECT id, quantity_added, added_at
+      FROM public.gift_box_dealers_stock_history
+      WHERE product_id = $1
+      ORDER BY added_at DESC
+    `;
+    const result = await pool.query(query, [id]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch stock history' });
   }
 };

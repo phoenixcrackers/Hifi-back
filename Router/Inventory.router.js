@@ -7,7 +7,9 @@ const {
   deleteGiftBoxProduct, 
   toggleGiftBoxProductStatus, 
   toggleGiftBoxFastRunning,
-  bookProduct 
+  bookProduct,
+  addStock,
+  getStockHistory
 } = require('../Controller/Inventory.controller');
 const multer = require('multer');
 
@@ -22,5 +24,7 @@ router.delete('/gift-box-products/:id', deleteGiftBoxProduct);
 router.patch('/gift-box-products/:id/toggle-status', toggleGiftBoxProductStatus);
 router.patch('/gift-box-products/:id/toggle-fast-running', toggleGiftBoxFastRunning);
 router.post('/gift-box-products/:id/book', bookProduct);
+router.post('/gift-box-products/:id/add-stock', addStock);
+router.get('/gift-box-products/:id/stock-history', getStockHistory);
 
 module.exports = router;
