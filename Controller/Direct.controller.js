@@ -291,7 +291,7 @@ exports.createBooking = async (req, res) => {
     );
 
     const query = `
-      INSERT INTO public.dboooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
+      INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13)
       RETURNING id, created_at, customer_type, pdf, order_id
     `;
@@ -345,7 +345,7 @@ exports.getInvoice = async (req, res) => {
     }
 
     let bookingQuery = await pool.query(
-      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf FROM public.dboooking WHERE order_id = $1',
+      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf FROM public.dbooking WHERE order_id = $1',
       [order_id]
     );
 
@@ -354,7 +354,7 @@ exports.getInvoice = async (req, res) => {
       if (parts.length > 1) {
         const possibleOrderId = parts.slice(1).join('-');
         bookingQuery = await pool.query(
-          'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf FROM public.dboooking WHERE order_id = $1',
+          'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf FROM public.dbooking WHERE order_id = $1',
           [possibleOrderId]
         );
       }
@@ -384,7 +384,7 @@ exports.getInvoice = async (req, res) => {
       .replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${bookingQuery.rows[0].order_id}.pdf`);
-    fs.createReadStream(pdf).pipe(res);
+    fs.createReadStream(pdf).pipe(res);z
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
