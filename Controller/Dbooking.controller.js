@@ -302,7 +302,7 @@ exports.createBooking = async (req, res) => {
     const { customer_id, products, total, customer_type, customer_name, address, mobile_number, email, district, state, payment_method, amount_paid, admin_id } = req.body;
 
     // Generate order_id automatically in the format DORD-timestamp
-    const order_id = `DORD-${Date.now()}`;
+    const order_id = `ORD-${Date.now()}`;
 
     if (!products || !Array.isArray(products) || products.length === 0) return res.status(400).json({ message: 'Products array is required and must not be empty' });
     if (!total || total <= 0) return res.status(400).json({ message: 'Total must be a positive number' });

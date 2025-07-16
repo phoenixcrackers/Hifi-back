@@ -30,7 +30,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const ACCESS_TOKEN = 'EAAKZAUdN55kEBPCVvsNNZBMg38VsJsBcpEIYNnYqTitiZAUOBu0DHZC326LV4QslYX00y1oOnCMF0V1JzJLeJRIlKBbGpZA994coQ1ALIJq0DC4Xugmo8r0GhRvdsxJgHmduoG4fYcmidjBb55TQR50ncqktQMM7Ked1g4vOa2Dj9d5HGgXFEVMQYZA6ieDkBGPZCLW3lhFSvjDCL1eR9BRvz3UJJkYnggAGuT47ZB2AzRAZD'
+const ACCESS_TOKEN = 'EAAKZAUdN55kEBPCVvsNNZBMg38VsJsBcpEIYNnYqTitiZAUOBu0DHZC326LV4QslYX00y1oOnCMF0V1JzJLeJRIlKBbGpZA994coQ1ALIJq0DC4Xugmo8r0GhRvdsxJgHmduoG4fYcmidjBb55TQR50ncqktQMM7Ked1g4vOa2Dj9d5HGgXFEVMQYZA6ieDkBGPZCLW3lhFSvjDCL1eR9BRvz3UJJkYnggAGuT47ZB2AzRAZD';
 const PHONE_NUMBER_ID = '660922473779560';
 
 const generateInvoicePDF = (bookingData, customerDetails, products) => {
@@ -234,9 +234,10 @@ exports.createBooking = async (req, res) => {
   try {
     const { customer_id, order_id, products, total, customer_type, customer_name, address, mobile_number, email, district, state } = req.body;
 
+    // Ensure order_id starts with 'DORD'
     if (!order_id) return res.status(400).json({ message: 'Order ID is required' });
-    if (!/^[a-zA-Z0-9-_]+$/.test(order_id)) {
-      return res.status(400).json({ message: 'Invalid order_id format' });
+    if (!order_id.startsWith('DORD') || !/^[a-zA-Z0-9-_]+$/.test(order_id.slice(4))) {
+      return res.status(400).json({ message: 'Order ID must start with "DORD" followed by alphanumeric characters, hyphens, or underscores' });
     }
     if (!products || !Array.isArray(products) || products.length === 0) {
       return res.status(400).json({ message: 'Products array is required and must not be empty' });
@@ -340,8 +341,12 @@ exports.getInvoice = async (req, res) => {
       order_id = order_id.replace(/\.pdf$/, '');
     }
 
-    if (!/^[a-zA-Z0-9-_]+$/.test(order_id)) {
-      return res.status(400).json({ message: 'Invalid order_id format' });
+    // Ensure order_id starts with 'DORD'
+    if (!order_id.startsWith('DORD') || !/^[a-zA-Z0-9-_]+$/.test(order_id.slice(4))) {
+      return res.status(400).json({ 
+        message: 'Invalid order_id format', 
+        details: 'Order ID must start with "DORD" followed by alphanumeric characters, hyphens, or underscores' 
+      });
     }
 
     let bookingQuery = await pool.query(
@@ -351,11 +356,11 @@ exports.getInvoice = async (req, res) => {
 
     if (bookingQuery.rows.length === 0) {
       const parts = order_id.split('-');
-      if (parts.length > 1) {
+      if (parts.length > 1 && parts[0] === 'DORD') {
         const possibleOrderId = parts.slice(1).join('-');
         bookingQuery = await pool.query(
           'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf FROM public.dbooking WHERE order_id = $1',
-          [possibleOrderId]
+          [`DORD-${possibleOrderId}`]
         );
       }
     }
@@ -363,7 +368,7 @@ exports.getInvoice = async (req, res) => {
     if (bookingQuery.rows.length === 0) {
       return res.status(404).json({ 
         message: 'Invoice not found', 
-        details: `No booking found for order_id '${order_id}'. Please use the order_id from the booking response (e.g., 'DORD-1751548161837').`
+        details: `No booking found for order_id '${order_id}'. Please use an order_id starting with 'DORD' (e.g., 'DORD-1751548161837').`
       });
     }
 
@@ -384,10 +389,17 @@ exports.getInvoice = async (req, res) => {
       .replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${bookingQuery.rows[0].order_id}.pdf`);
-    fs.createReadStream(pdf).pipe(res);z
+    fs.createReadStream(pdf).pipe(res);
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
 };
 
-module.exports;
+module.exports = {
+  upload,
+  getCustomers: exports.getCustomers,
+  getProductTypes: exports.getProductTypes,
+  getProductsByType: exports.getProductsByType,
+  createBooking: exports.createBooking,
+  getInvoice: exports.getInvoice
+};
