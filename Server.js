@@ -50,6 +50,7 @@ app.use('/api', require('./Router/Admin.router'));
 app.use('/api', require('./Router/Dbooking.router'));
 app.use('/api/directcust', require('./Router/Directcust.router'));
 app.use('/api/direct', require('./Router/Direct.router'));
+app.use('/api', require('./Router/Quotation.router'));
 
 // Start server
 const PORT = process.env.PORT || 5000;
