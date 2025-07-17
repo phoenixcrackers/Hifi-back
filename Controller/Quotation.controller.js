@@ -71,10 +71,7 @@ const generateQuotationPDF = (quotationData, customerDetails, products) => {
 const generateInvoicePDF = (bookingData, customerDetails, products) => {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
-    const safeCustomerName = customerDetails.customer_name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
+    const safeCustomerName = customerDetails.customer_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     const pdfPath = path.join(__dirname, '../pdf_data', `${safeCustomerName}-${bookingData.order_id}.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
@@ -106,7 +103,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products) => {
     let total = 0;
     products.forEach((product, index) => {
       const price = parseFloat(product.price);
-      const discount = parseFloat(product.discount);
+      const discount = parseFloat(product.discount || 0);
       const productTotal = (price - (price * discount / 100)) * product.quantity;
       total += productTotal;
       doc.font('Helvetica')
@@ -115,9 +112,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products) => {
         .text(`Rs.${price.toFixed(2)}`, 350, y)
         .text(`Rs.${productTotal.toFixed(2)}`, 450, y);
       y += 20;
-      if (index < products.length - 1) {
-        doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
-      }
+      if (index < products.length - 1) doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
     });
 
     doc.moveDown(2);
@@ -125,12 +120,8 @@ const generateInvoicePDF = (bookingData, customerDetails, products) => {
 
     doc.end();
     
-    stream.on('finish', () => {
-      resolve(pdfPath);
-    });
-    stream.on('error', (err) => {
-      reject(err);
-    });
+    stream.on('finish', () => resolve(pdfPath));
+    stream.on('error', (err) => reject(err));
   });
 };
 
