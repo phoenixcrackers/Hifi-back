@@ -185,7 +185,7 @@ exports.createQuotation = async (req, res) => {
     }
 
     const est_id = `EST-${Date.now()}`;
-    const { pdfPath, pdfKey, calculatedTotal } = await generateQuotationPDF(
+    const { pdfPath, calculatedTotal } = await generateQuotationPDF(
       { est_id, customer_type: finalCustomerType, total },
       customerDetails,
       products
@@ -209,7 +209,7 @@ exports.createQuotation = async (req, res) => {
       customerDetails.state || null,
       finalCustomerType,
       'pending',
-      pdfKey // Store S3 key
+      pdfPath
     ];
     const result = await pool.query(query, values);
 
@@ -218,11 +218,10 @@ exports.createQuotation = async (req, res) => {
       id: result.rows[0].id,
       created_at: result.rows[0].created_at,
       customer_type: result.rows[0].customer_type,
-      pdf_url: pdfPath, // Return presigned URL
+      pdf_path: result.rows[0].pdf,
       est_id: result.rows[0].est_id
     });
   } catch (err) {
-    console.error('Error in createQuotation:', err);
     res.status(500).json({ message: 'Failed to create quotation', error: err.message });
   }
 };
