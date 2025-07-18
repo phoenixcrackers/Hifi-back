@@ -30,154 +30,124 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const ACCESS_TOKEN = 'EAAKZAUdN55kEBPCVvsNNZBMg38VsJsBcpEIYNnYqTitiZAUOBu0DHZC326LV4QslYX00y1oOnCMF0V1JzJLeJRIlKBbGpZA994coQ1ALIJq0DC4Xugmo8r0GhRvdsxJgHmduoG4fYcmidjBb55TQR50ncqktQMM7Ked1g4vOa2Dj9d5HGgXFEVMQYZA6ieDkBGPZCLW3lhFSvjDCL1eR9BRvz3UJJkYnggAGuT47ZB2AzRAZD';
-const PHONE_NUMBER_ID = '660922473779560';
-
-const generateInvoicePDF = (bookingData, customerDetails, products) => {
+const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges = {}) => {
   return new Promise((resolve, reject) => {
+    // Input validation
+    if (!bookingData || !customerDetails || !Array.isArray(products)) {
+      return reject(new Error('Invalid input: bookingData, customerDetails, and products are required'));
+    }
+
     const doc = new PDFDocument({ margin: 50 });
-    const safeCustomerName = customerDetails.customer_name
+    const safeCustomerName = (customerDetails.customer_name || 'unknown')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../pdf_data', `${safeCustomerName}-${bookingData.order_id}.pdf`);
+    const pdfPath = path.join(__dirname, '../pdf_data', `${safeCustomerName}-${bookingData.order_id || 'unknown'}.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
-    doc.fontSize(20).font('Helvetica-Bold').text('Phoenix Crackers', 50, 50);
-    doc.fontSize(12).font('Helvetica').text('Location: Phoenix Crackers, Anil kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 80);
-    doc.text('Mobile Number: +91 63836 59214', 50, 95);
-    doc.text('Email Address: nivasramasamy27@gmail.com', 50, 110);
-    
-    doc.fontSize(16).font('Helvetica-Bold').text('Invoice', 50, 150);
-    
+    // Header
+    doc.fontSize(20).font('Helvetica-Bold').text('Invoice', 50, 50, { align: 'center' });
     doc.fontSize(12).font('Helvetica')
-      .text(`Customer Name: ${customerDetails.customer_name || 'N/A'}`, 50, 180)
-      .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 50, 195)
-      .text(`Address: ${customerDetails.address || 'N/A'}`, 50, 210)
-      .text(`District: ${customerDetails.district || 'N/A'}`, 50, 225)
-      .text(`State: ${customerDetails.state || 'N/A'}`, 50, 240)
-      .text(`Customer Type: ${bookingData.customer_type || 'User'}`, 50, 255)
-      .text(`Order ID: ${bookingData.order_id}`, 50, 270);
+      .text('Hifi Pyro Park', 50, 80, {align:'center'})
+      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, {align:'center'})
+      .text('Mobile: +91 63836 59214', 50, 110, {align:'center'})
+      .text('Email: nivasramasamy27@gmail.com', 50, 125, {align:'center'});
 
-    const tableY = 320;
+    // Customer Details (Left and Right)
+    doc.fontSize(12).font('Helvetica')
+      .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 50, 160)
+      .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 50, 175)
+      .text(`Address: ${customerDetails.address || 'N/A'}`, 50, 190)
+      .text(`District: ${customerDetails.district || 'N/A'}`, 300, 160, { align: 'right' })
+      .text(`State: ${customerDetails.state || 'N/A'}`, 300, 175, { align: 'right' })
+      .text(`Customer Type: ${bookingData.customer_type || 'User'}`, 300, 190, { align: 'right' })
+      .text(`Order ID: ${bookingData.order_id || 'N/A'}`, 300, 205, { align: 'right' });
+
+    // Table Header
+    const tableY = 250;
+    const tableWidth = 500;
+    const colWidths = [50, 150, 80, 80, 60, 80]; // Sl No, Product, Quantity, Price, Per, Total
+    const colX = [50, 100, 250, 330, 410, 470]; // X positions for columns
+
+    // Draw table top border
+    doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
+
+    // Table Header
     doc.fontSize(10).font('Helvetica-Bold')
-      .text('Product', 50, tableY)
-      .text('Quantity', 250, tableY)
-      .text('Price', 350, tableY)
-      .text('Total', 450, tableY);
-    
-    let y = tableY + 25;
-    let total = 0;
-    products.forEach((product, index) => {
-      const price = parseFloat(product.price);
-      const discount = parseFloat(product.discount);
-      const productTotal = (price - (price * discount / 100)) * product.quantity;
-      total += productTotal;
-      doc.font('Helvetica')
-        .text(product.productname, 50, y)
-        .text(product.quantity, 250, y)
-        .text(`Rs.${price.toFixed(2)}`, 350, y)
-        .text(`Rs.${productTotal.toFixed(2)}`, 450, y);
-      y += 20;
-      if (index < products.length - 1) {
-        doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
+      .text('Sl No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
+      .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'center' })
+      .text('Quantity', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
+      .text('Price', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'center' })
+      .text('Per', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'center' })
+      .text('Total', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'center' });
+
+    // Draw header bottom border
+    doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
+
+    // Draw vertical lines for header
+    colX.forEach((x, i) => {
+      doc.moveTo(x, tableY - 5).lineTo(x, tableY + 15).stroke();
+      if (i === colX.length - 1) {
+        doc.moveTo(x + colWidths[i], tableY - 5).lineTo(x + colWidths[i], tableY + 15).stroke();
       }
     });
 
-    doc.moveDown(2);
-    doc.font('Helvetica-Bold').text(`Total: Rs.${total.toFixed(2)}`, 450, y + 20);
+    // Table Rows
+    let y = tableY + 25;
+    let total = 0;
+    products.forEach((product, index) => {
+      const price = parseFloat(product.price) || 0;
+      const discount = parseFloat(product.discount || 0);
+      const productTotal = (price - (price * discount / 100)) * (product.quantity || 0);
+      total += productTotal;
+
+      // Draw row content
+      doc.font('Helvetica')
+        .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+        .text(product.productname || 'N/A', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'center' })
+        .text(product.quantity || 0, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+        .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'center' })
+        .text(product.per || 'N/A', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'center' })
+        .text(`Rs.${productTotal.toFixed(2)}`, colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' });
+
+      // Draw row bottom border
+      doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+
+      // Draw vertical lines for row
+      colX.forEach((x, i) => {
+        doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+        if (i === colX.length - 1) {
+          doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+        }
+      });
+
+      y += 20;
+    });
+
+    // Extra Charges (only if present)
+    y += 10;
+    const tax = parseFloat(extraCharges.tax || 0);
+    const pf = parseFloat(extraCharges.pf || 0);
+    const minus = parseFloat(extraCharges.minus || 0);
+    if (tax > 0 || pf > 0 || minus > 0) {
+      let extraChargesText = '';
+      if (tax > 0) extraChargesText += `Tax: Rs.${tax.toFixed(2)}  `;
+      if (pf > 0) extraChargesText += `P&F: Rs.${pf.toFixed(2)}  `;
+      if (minus > 0) extraChargesText += `Deduction: -Rs.${minus.toFixed(2)}  `;
+      doc.font('Helvetica').text(extraChargesText.trim(), 450, y, { align: 'right' });
+      y += 20;
+      total = total + tax + pf - minus;
+    }
+
+    // Grand Total
+    doc.font('Helvetica-Bold').text(`Grand Total: Rs.${total.toFixed(2)}`, 450, y, { align: 'right' });
 
     doc.end();
-    
-    stream.on('finish', () => {
-      resolve(pdfPath);
-    });
-    stream.on('error', (err) => {
-      reject(err);
-    });
+    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: total }));
+    stream.on('error', (err) => reject(err));
   });
 };
-
-async function uploadPDF(pdfPath) {
-  const form = new FormData();
-  form.append('file', fs.createReadStream(pdfPath));
-  form.append('type', 'application/pdf');
-  form.append('messaging_product', 'whatsapp');
-
-  const res = await axios.post(
-    `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/media`,
-    form,
-    {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        ...form.getHeaders(),
-      },
-    }
-  );
-
-  return res.data.id;
-}
-
-async function sendTemplateWithPDF(mediaId, total, customerDetails) {
-  let recipientNumber = customerDetails.mobile_number;
-  if (!recipientNumber) {
-    throw new Error('Mobile number is missing in customer details');
-  }
-  recipientNumber = recipientNumber.replace(/\D/g, '');
-  if (!recipientNumber.startsWith('+')) {
-    if (recipientNumber.length === 10) {
-      recipientNumber = `+91${recipientNumber}`;
-    } else if (recipientNumber.length === 12 && recipientNumber.startsWith('91')) {
-      recipientNumber = `+${recipientNumber}`;
-    } else {
-      throw new Error('Invalid mobile number format');
-    }
-  }
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: recipientNumber,
-    type: 'template',
-    template: {
-      name: 'purchase_receipt_1',
-      language: { code: 'en_US' },
-      components: [
-        {
-          type: 'header',
-          parameters: [
-            {
-              type: 'document',
-              document: {
-                id: mediaId,
-                filename: 'receipt.pdf',
-              },
-            },
-          ],
-        },
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: `Rs.${parseFloat(total).toFixed(2)}` },
-            { type: 'text', text: 'Phoenix Crackers, Anil kumar Eye Hospital Opp, Sattur Road, Sivakasi' },
-            { type: 'text', text: 'receipt' },
-          ],
-        },
-      ],
-    },
-  };
-
-  const res = await axios.post(
-    `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`,
-    payload,
-    {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-}
 
 exports.getCustomers = async (req, res) => {
   try {
@@ -313,13 +283,6 @@ exports.createBooking = async (req, res) => {
     ];
     const result = await pool.query(query, values);
 
-    try {
-      const mediaId = await uploadPDF(pdfPath);
-      await sendTemplateWithPDF(mediaId, total, customerDetails);
-    } catch (err) {
-      console.error('WhatsApp PDF sending failed:', err);
-    }
-
     res.status(201).json({
       message: 'Booking created successfully',
       id: result.rows[0].id,
@@ -393,13 +356,4 @@ exports.getInvoice = async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
-};
-
-module.exports = {
-  upload,
-  getCustomers: exports.getCustomers,
-  getProductTypes: exports.getProductTypes,
-  getProductsByType: exports.getProductsByType,
-  createBooking: exports.createBooking,
-  getInvoice: exports.getInvoice
 };
