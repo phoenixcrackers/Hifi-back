@@ -13,7 +13,6 @@ const pool = new Pool({
 
 const generateQuotationPDF = (quotationData, customerDetails, products, extraCharges = {}) => {
   return new Promise((resolve, reject) => {
-    // Input validation
     if (!quotationData || !customerDetails || !Array.isArray(products)) {
       return reject(new Error('Invalid input: quotationData, customerDetails, and products are required'));
     }
@@ -23,17 +22,21 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../quotation', `${safeCustomerName}-${quotationData.est_id || 'unknown'}.pdf`);
+    const pdfDir = path.join(__dirname, 'quotation');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeCustomerName}-${quotationData.est_id || 'unknown'}.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
     // Header
     doc.fontSize(20).font('Helvetica-Bold').text('Quotation', 50, 50, { align: 'center' });
     doc.fontSize(12).font('Helvetica')
-      .text('Hifi Pyro Park', 50, 80, {align:'center'})
-      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, {align:'center'})
-      .text('Mobile: +91 63836 59214', 50, 110, {align:'center'})
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, {align:'center'});
+      .text('Hifi Pyro Park', 50, 80, { align: 'center' })
+      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
+      .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
+      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' });
 
     // Customer Details (Left and Right)
     doc.fontSize(12).font('Helvetica')
@@ -49,7 +52,7 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
     const tableY = 250;
     const tableWidth = 500;
     const colWidths = [50, 150, 80, 80, 60, 80]; // Sl No, Product, Quantity, Price, Per, Total
-    const colX = [50, 100, 250, 330, 410, 470]; // X positions for columns
+    const colX = [50, 100, 250, 330, 410, 470];
 
     // Draw table top border
     doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
@@ -133,21 +136,25 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
 const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges = {}) => {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
-    const safeCustomerName = customerDetails.customer_name
+    const safeCustomerName = (customerDetails.customer_name || 'unknown')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../pdf_data', `${safeCustomerName}-${bookingData.order_id}.pdf`);
+    const pdfDir = path.join(__dirname, 'pdf_data');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeCustomerName}-${bookingData.order_id}.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
     // Header
     doc.fontSize(20).font('Helvetica-Bold').text('Invoice', 50, 50, { align: 'center' });
     doc.fontSize(12).font('Helvetica')
-      .text('Hifi Pyro Park', 50, 80, {align:'center'})
-      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, {align:'center'})
-      .text('Mobile: +91 63836 59214', 50, 110, {align:'center'})
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, {align:'center'});
+      .text('Hifi Pyro Park', 50, 80, { align: 'center' })
+      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
+      .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
+      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' });
 
     // Customer Details (Left and Right)
     doc.fontSize(12).font('Helvetica')
@@ -163,7 +170,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
     const tableY = 250;
     const tableWidth = 500;
     const colWidths = [200, 100, 100, 100]; // Product, Quantity, Price, Total
-    const colX = [50, 250, 350, 450]; // X positions for columns
+    const colX = [50, 250, 350, 450];
 
     // Draw table top border
     doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
