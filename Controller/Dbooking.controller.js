@@ -186,33 +186,48 @@ exports.getAdminTransactions = async (req, res) => {
 
 exports.getBookings = async (req, res) => {
   try {
-    const { status } = req.query;
-
-    // Build the query parts
-    const selectPart = `
+    const result = await pool.query(`
       SELECT 
-        d.id, d.customer_id, d.order_id, d.products, d.total, d.address, d.mobile_number, 
-        d.customer_name, d.email, d.district, d.state, d.customer_type, d.status, 
-        d.created_at, d.pdf, d.payment_method, d.amount_paid, d.admin_id, 
-        d.transport_type, d.transport_name, d.transport_contact, d.lr_number, 
-        d.transaction_date, a.username AS admin_username
-    `;
-    const fromPart = `
-      FROM public.dbooking d
-      LEFT JOIN public.admin a ON d.admin_id = a.id
-    `;
-    const wherePart = status && status.trim() !== '' ? ' WHERE d.status = $1' : '';
-    const orderPart = ' ORDER BY d.created_at DESC';
+        id,
+        order_id,
+        customer_name,
+        company_name,
+        license_number,
+        address,
+        district,
+        state,
+        mobile_number,
+        email,
+        products,
+        status,
+        created_at,
+        pdf,
+        remaining,
+        admin,
+        customer_type,
+        customer_id,
+        balance,
+        amount_paid,
+        payment_date,
+        amount_status,
+        payment_method,
+        admin_id,
+        transaction_date,
+        transport_type,
+        transport_name,
+        transport_contact,
+        lr_number,
+        extra_charges,
+        total,
+        dispatched_qty  -- ✅ ADDED THIS LINE
+      FROM public.dbooking
+      ORDER BY created_at DESC
+    `);
 
-    // Combine query parts
-    const query = [selectPart, fromPart, wherePart, orderPart].join(' ').trim();
-    const params = status && status.trim() !== '' ? [status] : [];
-
-    const result = await pool.query(query, params);
     res.status(200).json(result.rows);
-  } catch (err) {
-    console.error('Error in getBookings:', err);
-    res.status(500).json({ message: 'Failed to fetch bookings', error: err.message });
+  } catch (error) {
+    console.error('Error fetching bookings:', error.message);
+    res.status(500).json({ error: 'Failed to fetch bookings' });
   }
 };
 
@@ -231,65 +246,91 @@ exports.getTransactions = async (req, res) => {
 };
 
 exports.updateBookingStatus = async (req, res) => {
+  const { id } = req.params;
+  const {
+    status,
+    dispatched_qty,
+    transport_type,
+    transport_name,
+    transport_contact,
+    lr_number,
+  } = req.body;
+
   try {
-    const { id } = req.params;
-    const { status, payment_method, amount_paid, admin_id, transport_type, transport_name, transport_contact, lr_number } = req.body;
+    // Fetch current booking to get product quantities and current dispatched_qty
+    const bookingResult = await pool.query(
+      'SELECT products, dispatched_qty FROM public.dbooking WHERE id = $1',
+      [id]
+    );
 
-    const booking = await pool.query('SELECT total, amount_paid FROM public.dbooking WHERE id = $1', [id]);
-    if (booking.rows.length === 0) throw new Error('Booking not found');
-    const currentTotal = parseFloat(booking.rows[0].total) || 0;
-    const currentPaid = parseFloat(booking.rows[0].amount_paid) || 0;
-    const newPaid = currentPaid + (amount_paid ? parseFloat(amount_paid) : 0);
+    if (bookingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
 
-    // Start transaction to ensure consistency
-    await pool.query('BEGIN');
+    const booking = bookingResult.rows[0];
 
-    // Update booking status, payment_method, amount_paid, and admin_id
-    // Note: The 'total' column is NOT modified to preserve the initial booking total
-    let updateQuery = `
-      UPDATE public.dbooking
-      SET status = $1, payment_method = $2, amount_paid = $3, admin_id = $4,
-          transaction_date = NOW()
-    `;
-    const updateValues = [status, payment_method, newPaid, admin_id];
-    let paramCount = 5;
+    // Parse products JSON safely
+    let products = [];
+    try {
+      products = typeof booking.products === 'string'
+        ? JSON.parse(booking.products)
+        : booking.products;
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid product data format' });
+    }
 
-    if (status === 'dispatched' && transport_type) {
+    // Compute total quantity ordered
+    const totalQty = products.reduce((sum, p) => sum + (parseInt(p.quantity) || 0), 0);
+    const currentDispatched = parseInt(booking.dispatched_qty || 0);
+    const newDispatchQty = parseInt(dispatched_qty || 0);
+    const updatedDispatched = currentDispatched + newDispatchQty;
+
+    if (newDispatchQty <= 0) {
+      return res.status(400).json({ error: 'Invalid dispatch quantity' });
+    }
+
+    if (updatedDispatched > totalQty) {
+      return res.status(400).json({ error: 'Dispatched quantity exceeds total ordered quantity' });
+    }
+
+    // Build dynamic SQL update
+    let updateQuery = 'UPDATE public.dbooking SET status = $1, dispatched_qty = $2';
+    const updateValues = [status, updatedDispatched];
+    let paramCount = 3;
+
+    if (transport_type) {
       updateQuery += `, transport_type = $${paramCount++}`;
       updateValues.push(transport_type);
-      if (transport_type === 'transport') {
-        updateQuery += `, transport_name = $${paramCount++}, transport_contact = $${paramCount++}, lr_number = $${paramCount++}`;
-        updateValues.push(transport_name || null, transport_contact || null, lr_number || null);
-      } else {
-        updateQuery += `, transport_name = NULL, transport_contact = NULL, lr_number = NULL`;
+    }
+
+    if (transport_type === 'transport') {
+      if (transport_name) {
+        updateQuery += `, transport_name = $${paramCount++}`;
+        updateValues.push(transport_name);
+      }
+      if (transport_contact) {
+        updateQuery += `, transport_contact = $${paramCount++}`;
+        updateValues.push(transport_contact);
+      }
+      if (lr_number) {
+        updateQuery += `, lr_number = $${paramCount++}`;
+        updateValues.push(lr_number);
       }
     }
 
-    updateQuery += ` WHERE id = $${paramCount} RETURNING *`;
+    updateQuery += ` WHERE id = $${paramCount}`;
     updateValues.push(id);
 
-    const result = await pool.query(updateQuery, updateValues);
+    await pool.query(updateQuery, updateValues);
 
-    // Insert transaction record into payment_transactions if a payment is made
-    if (amount_paid) {
-      const transactionQuery = `
-        INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date)
-        VALUES ($1, $2, $3, $4, NOW())
-        RETURNING *
-      `;
-      const transactionValues = [id, parseFloat(amount_paid), payment_method, admin_id];
-      await pool.query(transactionQuery, transactionValues);
-    }
-
-    await pool.query('COMMIT');
-
-    res.status(200).json({ message: 'Status updated', booking: result.rows[0] });
-  } catch (err) {
-    await pool.query('ROLLBACK');
-    console.error('Error in updateBookingStatus:', err);
-    res.status(500).json({ message: 'Failed to update status', error: err.message });
+    res.status(200).json({ message: 'Booking status updated successfully' });
+  } catch (error) {
+    console.error('Error updating booking status:', error.message);
+    res.status(500).json({ error: 'Failed to update booking status' });
   }
 };
+
+
 
 exports.createBooking = async (req, res) => {
   try {
@@ -467,3 +508,4 @@ exports.bookProduct = async (req, res) => {
     res.status(500).json({ message: 'Failed to book product' });
   }
 };
+

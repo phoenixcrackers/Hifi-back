@@ -202,17 +202,16 @@ exports.getProductsByType = async (req, res) => {
 
 exports.createBooking = async (req, res) => {
   try {
-    const { customer_id, order_id, products, total, customer_type, customer_name, address, mobile_number, email, district, state } = req.body;
+    const { customer_id, products, total, customer_type, customer_name, address, mobile_number, email, district, state, payment_method, amount_paid, admin_id } = req.body;
 
-    // Ensure order_id starts with 'DORD'
-    if (!order_id) return res.status(400).json({ message: 'Order ID is required' });
-    if (!order_id.startsWith('DORD') || !/^[a-zA-Z0-9-_]+$/.test(order_id.slice(4))) {
-      return res.status(400).json({ message: 'Order ID must start with "DORD" followed by alphanumeric characters, hyphens, or underscores' });
-    }
-    if (!products || !Array.isArray(products) || products.length === 0) {
-      return res.status(400).json({ message: 'Products array is required and must not be empty' });
-    }
+    // Generate order_id automatically in the format DORD-timestamp
+    const order_id = `DORD-${Date.now()}`;
+
+    if (!products || !Array.isArray(products) || products.length === 0) return res.status(400).json({ message: 'Products array is required and must not be empty' });
     if (!total || total <= 0) return res.status(400).json({ message: 'Total must be a positive number' });
+    if (payment_method && !['cash', 'bank'].includes(payment_method)) return res.status(400).json({ message: 'Invalid payment method' });
+    if (payment_method && (!amount_paid || amount_paid <= 0)) return res.status(400).json({ message: 'Amount paid must be a positive number when payment method is provided' });
+    if (payment_method && !admin_id) return res.status(400).json({ message: 'Admin ID is required when payment method is provided' });
 
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
@@ -222,16 +221,12 @@ exports.createBooking = async (req, res) => {
         'SELECT id, customer_name, address, mobile_number, email, district, state, customer_type FROM public.gbcustomers WHERE id = $1',
         [customer_id]
       );
-      if (customerCheck.rows.length === 0) {
-        return res.status(404).json({ message: 'Customer not found' });
-      }
+      if (customerCheck.rows.length === 0) return res.status(404).json({ message: 'Customer not found' });
       const { customer_name: db_name, address: db_address, mobile_number: db_mobile, email: db_email, district: db_district, state: db_state, customer_type: dbCustomerType } = customerCheck.rows[0];
       finalCustomerType = customer_type || dbCustomerType || 'User';
       customerDetails = { customer_name: db_name, address: db_address, mobile_number: db_mobile, email: db_email, district: db_district, state: db_state };
     } else {
-      if (finalCustomerType !== 'User') {
-        return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID' });
-      }
+      if (finalCustomerType !== 'User') return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID' });
       if (!customer_name) return res.status(400).json({ message: 'Customer name is required' });
       if (!address) return res.status(400).json({ message: 'Address is required' });
       if (!district) return res.status(400).json({ message: 'District is required' });
@@ -240,58 +235,66 @@ exports.createBooking = async (req, res) => {
       if (!email) return res.status(400).json({ message: 'Email is required' });
     }
 
+    // Validate products and check stock availability
     for (const product of products) {
       const { id, product_type, quantity } = product;
-      if (!id || !product_type || !quantity || quantity < 1) {
-        return res.status(400).json({ message: 'Each product must have a valid ID, product type, and positive quantity' });
-      }
+      if (!id || !product_type || !quantity || quantity < 1) return res.status(400).json({ message: 'Each product must have a valid ID, product type, and positive quantity' });
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(
-        `SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`,
-        [id]
-      );
-      if (productCheck.rows.length === 0) {
-        return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or not available` });
-      }
+      const productCheck = await pool.query(`SELECT id, stock FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+      if (productCheck.rows.length === 0) return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or not available` });
+      if (quantity > productCheck.rows[0].stock) return res.status(400).json({ message: `Insufficient stock for product ${id} of type ${product_type}` });
     }
 
-    const pdfPath = await generateInvoicePDF(
-      { order_id, customer_type: finalCustomerType, total },
-      customerDetails,
-      products
-    );
+    // Start transaction to ensure consistency
+    await pool.query('BEGIN');
 
-    const query = `
-      INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13)
+    // Update stock for each product
+    for (const product of products) {
+      const { id, product_type, quantity } = product;
+      const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+      await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
+    }
+
+    const pdfResult = await generateInvoicePDF({ order_id, customer_type: finalCustomerType, total }, customerDetails, products);
+
+    // Insert booking with initial total, which will not be modified later
+    const bookingQuery = `
+      INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), $13, $14, $15, $16)
       RETURNING id, created_at, customer_type, pdf, order_id
     `;
-    const values = [
-      customer_id || null,
-      order_id,
-      JSON.stringify(products),
-      parseFloat(total),
-      customerDetails.address || null,
-      customerDetails.mobile_number || null,
-      customerDetails.customer_name || null,
-      customerDetails.email || null,
-      customerDetails.district || null,
-      customerDetails.state || null,
-      finalCustomerType,
-      'booked',
-      pdfPath
+    const bookingValues = [
+      customer_id || null, order_id, JSON.stringify(products), parseFloat(total),
+      customerDetails.address || null, customerDetails.mobile_number || null,
+      customerDetails.customer_name || null, customerDetails.email || null,
+      customerDetails.district || null, customerDetails.state || null,
+      finalCustomerType, 'booked', pdfResult.pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null
     ];
-    const result = await pool.query(query, values);
+    const bookingResult = await pool.query(bookingQuery, bookingValues);
+
+    // If payment is made, insert into payment_transactions table
+    if (payment_method && amount_paid) {
+      const transactionQuery = `
+        INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date)
+        VALUES ($1, $2, $3, $4, NOW())
+        RETURNING *
+      `;
+      const transactionValues = [bookingResult.rows[0].id, parseFloat(amount_paid), payment_method, admin_id];
+      await pool.query(transactionQuery, transactionValues);
+    }
+
+    await pool.query('COMMIT');
 
     res.status(201).json({
       message: 'Booking created successfully',
-      id: result.rows[0].id,
-      created_at: result.rows[0].created_at,
-      customer_type: result.rows[0].customer_type,
-      pdf_path: result.rows[0].pdf,
-      order_id: result.rows[0].order_id
+      id: bookingResult.rows[0].id,
+      created_at: bookingResult.rows[0].created_at,
+      customer_type: bookingResult.rows[0].customer_type,
+      pdf_path: bookingResult.rows[0].pdf,
+      order_id: bookingResult.rows[0].order_id
     });
   } catch (err) {
+    await pool.query('ROLLBACK');
     res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };

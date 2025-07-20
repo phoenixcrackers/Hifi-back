@@ -560,6 +560,7 @@ exports.bookQuotation = async (req, res) => {
       if (!customerDetails.email) return res.status(400).json({ message: 'Email is required' });
     }
 
+    // Validate products and check stock availability
     for (const product of products) {
       const { id, product_type, quantity } = product;
       if (!id || !product_type || !quantity || quantity < 1) {
@@ -567,11 +568,14 @@ exports.bookQuotation = async (req, res) => {
       }
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
       const productCheck = await pool.query(
-        `SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`,
+        `SELECT id, stock FROM public.${tableName} WHERE id = $1 AND status = 'on'`,
         [id]
       );
       if (productCheck.rows.length === 0) {
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or not available` });
+      }
+      if (quantity > productCheck.rows[0].stock) {
+        return res.status(400).json({ message: `Insufficient stock for product ${id} of type ${product_type}` });
       }
     }
 
@@ -580,7 +584,17 @@ exports.bookQuotation = async (req, res) => {
       return res.status(400).json({ message: 'Order ID must start with "DORD" followed by alphanumeric characters, hyphens, or underscores' });
     }
 
-    const pdfPath = await generateInvoicePDF(
+    // Start transaction to ensure consistency
+    await pool.query('BEGIN');
+
+    // Update stock for each product
+    for (const product of products) {
+      const { id, product_type, quantity } = product;
+      const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+      await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
+    }
+
+    const pdfResult = await generateInvoicePDF(
       { order_id, customer_type: finalCustomerType, total },
       customerDetails,
       products,
@@ -605,12 +619,14 @@ exports.bookQuotation = async (req, res) => {
       customerDetails.state || null,
       finalCustomerType,
       'booked',
-      pdfPath,
+      pdfResult.pdfPath,
       JSON.stringify(extra_charges || {})
     ];
     const result = await pool.query(query, values);
 
     await pool.query('UPDATE public.quotations SET status = $1 WHERE est_id = $2', ['booked', est_id]);
+
+    await pool.query('COMMIT');
 
     res.status(201).json({
       message: 'Booking created successfully',
@@ -621,6 +637,7 @@ exports.bookQuotation = async (req, res) => {
       order_id: result.rows[0].order_id
     });
   } catch (err) {
+    await pool.query('ROLLBACK');
     res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };
