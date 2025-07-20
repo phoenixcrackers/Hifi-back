@@ -137,7 +137,11 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
 
     const doc = new PDFDocument({ margin: 50 });
     const safeName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../receipt', `${safeName}-${bookingData.order_id || 'unknown'}-receipt.pdf`);
+    const pdfDir = path.join(__dirname, 'receipt');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeName}-${bookingData.order_id || 'unknown'}-receipt.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
