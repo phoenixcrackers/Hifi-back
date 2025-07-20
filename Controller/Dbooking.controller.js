@@ -321,7 +321,11 @@ exports.getReceipt = async (req, res) => {
 
     // Generate PDF path
     const safeName = customer_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../receipt', `${safeName}-${actualOrderId}-receipt.pdf`);
+    const pdfDir = path.join(__dirname, 'receipt');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeName}-${actualOrderId}-receipt.pdf`);
 
     // Check if PDF exists, regenerate if not
     if (!fs.existsSync(pdfPath)) {
