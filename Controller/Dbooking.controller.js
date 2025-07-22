@@ -96,7 +96,7 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
       paidToAdmin: payment.admin_username || 'N/A',
       date: new Date(payment.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
       amount: parseFloat(payment.amount_paid || 0).toFixed(2),
-    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // Sort earliest to latest
+    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     y += 25;
     tableData.forEach((row, index) => {
@@ -130,7 +130,7 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
         minus ? `Deduction: ₹${minus.toFixed(2)}` : '',
       ].filter(Boolean).join('\n');
       doc.font('Helvetica').text(extraText, 400, y, { align: 'right' });
-      y += 20 * (extraText.split('\n').length); // Adjust y based on number of lines
+      y += 20 * (extraText.split('\n').length);
     }
 
     // Total Row
@@ -147,55 +147,71 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
       '',
       totalAmount.toFixed(2),
     ], ['left', 'left', 'left', 'right', 'right']);
-    doc.moveTo(50, y - 5).lineTo(400, y - 5).stroke(); // Line for merged "Total" cell
+    doc.moveTo(50, y - 5).lineTo(400, y - 5).stroke();
     doc.moveTo(50, y + 15).lineTo(570, y + 15).stroke();
     colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
     doc.moveTo(570, y - 5).lineTo(570, y + 15).stroke();
 
     doc.end();
-    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: totalAmount }));
+    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: totalAmount, receiptId }));
     stream.on('error', reject);
   });
 };
 
 exports.getReceipt = async (req, res) => {
   try {
-    let { order_id } = req.params;
-    console.log(`Processing receipt for order_id: ${order_id}`);
+    let { receipt_id } = req.params;
+    console.log(`Processing receipt for receipt_id: ${receipt_id}`);
 
-    // Normalize order_id
-    if (order_id.endsWith('.pdf')) {
-      order_id = order_id.replace(/\.pdf$/, '');
+    // Normalize receipt_id
+    if (receipt_id.endsWith('.pdf')) {
+      receipt_id = receipt_id.replace(/\.pdf$/, '');
     }
 
-    // Validate order_id
-    const validationError = validateId(order_id);
-    if (validationError) {
-      console.error(`Validation error: ${validationError}`);
-      return res.status(400).json({ message: validationError });
+    // Validate receipt_id (e.g., rcp followed by 9 digits)
+    if (!receipt_id.startsWith('rcp') || !/^[a-zA-Z0-9]{12}$/.test(receipt_id)) {
+      console.error(`Invalid receipt_id format: ${receipt_id}`);
+      return res.status(400).json({ message: 'Invalid receipt_id. Must start with "rcp" followed by 9 digits.' });
     }
 
     // Fetch booking data
     console.log('Querying dbooking table...');
     let { rows } = await pool.query(
-      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at, receipt_id FROM public.dbooking WHERE order_id = $1',
-      [order_id]
+      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at, receipt_id, customer_id FROM public.dbooking WHERE receipt_id = $1',
+      [receipt_id]
     );
 
     if (!rows.length) {
-      const possibleOrderId = order_id.split('-').slice(1).join('-');
-      ({ rows } = await pool.query(
-        'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at, receipt_id FROM public.dbooking WHERE order_id = $1',
-        [possibleOrderId]
-      ));
+      console.error(`No booking found for receipt_id: ${receipt_id}`);
+      return res.status(404).json({ message: `Receipt not found for receipt_id '${receipt_id}'` });
     }
 
-    if (!rows.length) {
-      console.error(`No booking found for order_id: ${order_id} or ${possibleOrderId}`);
-      return res.status(404).json({ message: `Receipt not found for order_id '${order_id}'` });
+    const {
+      products,
+      total,
+      customer_name,
+      address,
+      mobile_number,
+      email,
+      district,
+      state,
+      customer_type,
+      status,
+      order_id: actualOrderId,
+      id: booking_id,
+      extra_charges,
+      created_at,
+      receipt_id: dbReceiptId,
+      customer_id
+    } = rows[0];
+
+    // Validate user association (if user is authenticated)
+    const userId = req.user?.id; // Assuming req.user is set by authentication middleware
+    if (userId && customer_id && customer_id !== userId) {
+      console.error(`User ${userId} not authorized for receipt_id: ${receipt_id}`);
+      return res.status(403).json({ message: 'Not authorized to access this receipt' });
     }
 
-    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, order_id: actualOrderId, id: booking_id, extra_charges, created_at, receipt_id } = rows[0];
     const parsedProducts = parseProducts(products);
     if (!parsedProducts) {
       console.error('Failed to parse products:', products);
@@ -221,18 +237,13 @@ exports.getReceipt = async (req, res) => {
 
     // Generate receipt ID and PDF path
     const safeName = customer_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const receiptId = receipt_id || generateReceiptId();
-    const pdfDir = path.join(__dirname, 'receipt');
-    if (!fs.existsSync(pdfDir)) {
-      fs.mkdirSync(pdfDir, { recursive: true });
-    }
-    const pdfPath = path.join(pdfDir, `${safeName}-${receiptId}.pdf`);
+    const pdfPath = path.join(__dirname, 'receipt', `${safeName}-${receipt_id}.pdf`);
 
-    // Generate PDF if it doesn't exist or if receipt_id is new
-    if (!fs.existsSync(pdfPath) || !receipt_id) {
+    // Generate PDF if it doesn't exist or if receipt_id is missing
+    if (!fs.existsSync(pdfPath) || !dbReceiptId) {
       console.log(`Generating new PDF at: ${pdfPath}`);
       try {
-        const { pdfPath: generatedPdfPath, receiptId: generatedReceiptId } = await generateReceiptPDF(
+        const { pdfPath: generatedPdfPath, calculatedTotal, receiptId: generatedReceiptId } = await generateReceiptPDF(
           { order_id: actualOrderId, customer_type, total, status, created_at },
           { customer_name, address, mobile_number, email, district, state },
           parsedProducts,
@@ -241,8 +252,10 @@ exports.getReceipt = async (req, res) => {
           extra_charges || {}
         );
         console.log(`PDF generated at: ${generatedPdfPath}`);
-        // Update receipt_id in dbooking table
-        await pool.query('UPDATE public.dbooking SET receipt_id = $1 WHERE order_id = $2', [generatedReceiptId, actualOrderId]);
+        // Update receipt_id in dbooking table if not already set
+        if (!dbReceiptId) {
+          await pool.query('UPDATE public.dbooking SET receipt_id = $1 WHERE id = $2', [generatedReceiptId, booking_id]);
+        }
       } catch (pdfError) {
         console.error('PDF generation failed:', pdfError.message, pdfError.stack);
         throw new Error(`Failed to generate receipt PDF: ${pdfError.message}`);
@@ -262,7 +275,7 @@ exports.getReceipt = async (req, res) => {
 
     // Serve the PDF
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${safeName}-${receiptId}.pdf`);
+    res.setHeader('Content-Disposition', `attachment; filename=${safeName}-${receipt_id}.pdf`);
     const stream = fs.createReadStream(pdfPath);
     stream.on('error', (streamError) => {
       console.error('Error reading PDF file:', streamError.message, streamError.stack);
@@ -696,24 +709,70 @@ exports.createBooking = async (req, res) => {
       return res.status(400).json({ message: 'Complete customer details required for non-existing customers' });
     }
 
+    // Start a transaction
+    await pool.query('BEGIN');
+
+    // Validate products and check stock
     for (const { id, product_type, quantity } of products) {
-      if (!id || !product_type || quantity < 1) return res.status(400).json({ message: 'Invalid product data' });
+      if (!id || !product_type || quantity < 1) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ message: 'Invalid product data' });
+      }
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const { rows } = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
-      if (!rows.length) return res.status(404).json({ message: `Product ${id} not found` });
+      const { rows } = await pool.query(
+        `SELECT id, stock FROM public.${tableName} WHERE id = $1 AND status = 'on'`,
+        [id]
+      );
+      if (!rows.length) {
+        await pool.query('ROLLBACK');
+        return res.status(404).json({ message: `Product ${id} not found` });
+      }
+      if (quantity > rows[0].stock) {
+        await pool.query('ROLLBACK');
+        return res.status(400).json({ message: `Insufficient stock for product ${id}` });
+      }
     }
 
-    const { pdfPath } = await generateInvoicePDF({ order_id, customer_type: finalCustomerType, total }, customerDetails, products);
+    // Update stock for each product
+    for (const { id, product_type, quantity } of products) {
+      const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+      await pool.query(
+        `UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`,
+        [quantity, id]
+      );
+    }
 
-    await pool.query('BEGIN');
+    // Generate PDF
+    const { pdfPath } = await generateInvoicePDF(
+      { order_id, customer_type: finalCustomerType, total },
+      customerDetails,
+      products
+    );
+
+    // Insert booking
     const { rows } = await pool.query(
       `INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'booked', NOW(), $12, $13, $14, $15) RETURNING id, created_at, customer_type, pdf, order_id`,
-      [customer_id || null, order_id, JSON.stringify(products), parseFloat(total), customerDetails.address || null, customerDetails.mobile_number || null, 
-       customerDetails.customer_name || null, customerDetails.email || null, customerDetails.district || null, customerDetails.state || null, 
-       finalCustomerType, pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null]
+      [
+        customer_id || null,
+        order_id,
+        JSON.stringify(products),
+        parseFloat(total),
+        customerDetails.address || null,
+        customerDetails.mobile_number || null,
+        customerDetails.customer_name || null,
+        customerDetails.email || null,
+        customerDetails.district || null,
+        customerDetails.state || null,
+        finalCustomerType,
+        pdfPath,
+        payment_method || null,
+        parseFloat(amount_paid) || 0,
+        admin_id || null,
+      ]
     );
 
+    // Insert payment transaction if applicable
     if (payment_method && amount_paid) {
       await pool.query(
         'INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date) VALUES ($1, $2, $3, $4, NOW())',
@@ -721,10 +780,12 @@ exports.createBooking = async (req, res) => {
       );
     }
 
+    // Commit transaction
     await pool.query('COMMIT');
     res.status(201).json({ message: 'Booking created successfully', ...rows[0] });
   } catch (err) {
     await pool.query('ROLLBACK');
+    console.error('Error in createBooking:', err.message);
     res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };
@@ -788,9 +849,11 @@ exports.bookProduct = async (req, res) => {
       return res.status(404).json({ message: rows.length ? 'Insufficient stock' : 'Product not found' });
     }
 
-    await pool.query('UPDATE public.gift_box_dealers SET stock = $1 WHERE id = $2', [rows[0].stock - quantity, id]);
-    res.json({ message: 'Product booked successfully', newStock: rows[0].stock - quantity });
+    const newStock = rows[0].stock - quantity;
+    await pool.query('UPDATE public.gift_box_dealers SET stock = $1 WHERE id = $2', [newStock, id]);
+
+    res.json({ message: 'Product booked successfully', newStock });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to book product' });
+    res.status(500).json({ message: 'Failed to book product', error: err.message });
   }
 };
