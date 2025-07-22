@@ -42,12 +42,243 @@ const drawTableRow = (doc, y, colX, colWidths, values, alignOptions = []) => {
     const align = (alignOptions[i] || 'center');
     doc.text(textVal, colX[i] + 5, y, { width: colWidths[i] - 10, align });
   });
-  doc.moveTo(50, y + 15).lineTo(550, y + 15).stroke();
+  doc.moveTo(50, y + 15).lineTo(570, y + 15).stroke();
   colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
-  doc.moveTo(550, y - 5).lineTo(550, y + 15).stroke();
+  doc.moveTo(570, y - 5).lineTo(570, y + 15).stroke();
+};
+
+const generateReceiptId = () => {
+  const randomNum = Math.floor(100000000 + Math.random() * 900000000); // 9-digit random number
+  return `rcp${randomNum}`;
 };
 
 const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = [], extraCharges = {}) => {
+  return new Promise((resolve, reject) => {
+    if (!bookingData || !customerDetails || !Array.isArray(products)) {
+      return reject(new Error('Invalid input: bookingData, customerDetails, and products required'));
+    }
+
+    const doc = new PDFDocument({ margin: 50 });
+    const safeName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const receiptId = generateReceiptId();
+    const pdfDir = path.join(__dirname, 'receipt');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeName}-${receiptId}.pdf`);
+    const stream = fs.createWriteStream(pdfPath);
+    doc.pipe(stream);
+
+    // Header
+    doc.fontSize(12).font('Helvetica').text(`Receipt ${receiptId}`, 300, 50, { align: 'right' });
+    doc.fontSize(20).font('Helvetica-Bold').text('Receipt', 50, 80, { align: 'center' });
+    doc.fontSize(12).font('Helvetica')
+      .text('Hifi Pyro Park', 50, 110, { align: 'left' })
+      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 125, { align: 'left' })
+      .text('Mobile: +91 63836 59214', 50, 140, { align: 'left' })
+      .text('Email: nivasramasamy27@gmail.com', 50, 155, { align: 'left' })
+      .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 300, 110, { align: 'right' })
+      .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 300, 125, { align: 'right' })
+      .text(`City: ${customerDetails.district || 'N/A'}`, 300, 140, { align: 'right' })
+      .text(`Order Date: ${new Date(bookingData.created_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 155, { align: 'right' });
+
+    // Payment Table
+    let y = 200;
+    const colWidths = [50, 150, 150, 100, 100];
+    const colX = [50, 100, 250, 400, 500];
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, ['Sl.No', 'Payment Type', 'Paid to Admin', 'Date', 'Amount (₹)'], ['center', 'left', 'left', 'right', 'right']);
+
+    // Table data (only payments)
+    const tableData = payments.map((payment, index) => ({
+      slNo: index + 1,
+      paymentType: payment.payment_method || 'N/A',
+      paidToAdmin: payment.admin_username || 'N/A',
+      date: new Date(payment.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+      amount: parseFloat(payment.amount_paid || 0).toFixed(2),
+    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // Sort earliest to latest
+
+    y += 25;
+    tableData.forEach((row, index) => {
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
+      }
+      drawTableRow(doc, y, colX, colWidths, [
+        row.slNo,
+        row.paymentType,
+        row.paidToAdmin,
+        row.date,
+        row.amount,
+      ], ['center', 'left', 'left', 'right', 'right']);
+      y += 20;
+    });
+
+    // Extra Charges
+    y += 10;
+    if (y > 700) {
+      doc.addPage();
+      y = 50;
+    }
+    const tax = parseFloat(extraCharges.tax || 0);
+    const pf = parseFloat(extraCharges.pf || 0);
+    const minus = parseFloat(extraCharges.minus || 0);
+    if (tax || pf || minus) {
+      const extraText = [
+        tax ? `Tax: ₹${tax.toFixed(2)}` : '',
+        pf ? `Packaging & Forwarding: ₹${pf.toFixed(2)}` : '',
+        minus ? `Deduction: ₹${minus.toFixed(2)}` : '',
+      ].filter(Boolean).join('\n');
+      doc.font('Helvetica').text(extraText, 400, y, { align: 'right' });
+      y += 20 * (extraText.split('\n').length); // Adjust y based on number of lines
+    }
+
+    // Total Row
+    const totalAmount = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+    if (y > 700) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, [
+      { text: 'Total', colSpan: 4 },
+      '',
+      '',
+      '',
+      totalAmount.toFixed(2),
+    ], ['left', 'left', 'left', 'right', 'right']);
+    doc.moveTo(50, y - 5).lineTo(400, y - 5).stroke(); // Line for merged "Total" cell
+    doc.moveTo(50, y + 15).lineTo(570, y + 15).stroke();
+    colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
+    doc.moveTo(570, y - 5).lineTo(570, y + 15).stroke();
+
+    doc.end();
+    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: totalAmount }));
+    stream.on('error', reject);
+  });
+};
+
+exports.getReceipt = async (req, res) => {
+  try {
+    let { order_id } = req.params;
+    console.log(`Processing receipt for order_id: ${order_id}`);
+
+    // Normalize order_id
+    if (order_id.endsWith('.pdf')) {
+      order_id = order_id.replace(/\.pdf$/, '');
+    }
+
+    // Validate order_id
+    const validationError = validateId(order_id);
+    if (validationError) {
+      console.error(`Validation error: ${validationError}`);
+      return res.status(400).json({ message: validationError });
+    }
+
+    // Fetch booking data
+    console.log('Querying dbooking table...');
+    let { rows } = await pool.query(
+      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at, receipt_id FROM public.dbooking WHERE order_id = $1',
+      [order_id]
+    );
+
+    if (!rows.length) {
+      const possibleOrderId = order_id.split('-').slice(1).join('-');
+      ({ rows } = await pool.query(
+        'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at, receipt_id FROM public.dbooking WHERE order_id = $1',
+        [possibleOrderId]
+      ));
+    }
+
+    if (!rows.length) {
+      console.error(`No booking found for order_id: ${order_id} or ${possibleOrderId}`);
+      return res.status(404).json({ message: `Receipt not found for order_id '${order_id}'` });
+    }
+
+    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, order_id: actualOrderId, id: booking_id, extra_charges, created_at, receipt_id } = rows[0];
+    const parsedProducts = parseProducts(products);
+    if (!parsedProducts) {
+      console.error('Failed to parse products:', products);
+      throw new Error('Invalid product data format');
+    }
+
+    // Fetch dispatch logs
+    console.log(`Querying dispatch_logs for order_id: ${actualOrderId}`);
+    const { rows: dispatchLogs } = await pool.query(
+      'SELECT product_name, quantity, dispatched_qty, dispatched_at, product_index FROM public.dispatch_logs WHERE order_id = $1 ORDER BY dispatched_at DESC',
+      [actualOrderId]
+    );
+
+    // Fetch payment transactions
+    console.log(`Querying payment_transactions for booking_id: ${booking_id}`);
+    const { rows: paymentRows } = await pool.query(
+      `SELECT pt.amount_paid, pt.payment_method, pt.created_at, a.username AS admin_username 
+       FROM public.payment_transactions pt 
+       LEFT JOIN public.admin a ON pt.admin_id = a.id 
+       WHERE pt.booking_id = $1 ORDER BY pt.id ASC`,
+      [booking_id]
+    );
+
+    // Generate receipt ID and PDF path
+    const safeName = customer_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const receiptId = receipt_id || generateReceiptId();
+    const pdfDir = path.join(__dirname, 'receipt');
+    if (!fs.existsSync(pdfDir)) {
+      fs.mkdirSync(pdfDir, { recursive: true });
+    }
+    const pdfPath = path.join(pdfDir, `${safeName}-${receiptId}.pdf`);
+
+    // Generate PDF if it doesn't exist or if receipt_id is new
+    if (!fs.existsSync(pdfPath) || !receipt_id) {
+      console.log(`Generating new PDF at: ${pdfPath}`);
+      try {
+        const { pdfPath: generatedPdfPath, receiptId: generatedReceiptId } = await generateReceiptPDF(
+          { order_id: actualOrderId, customer_type, total, status, created_at },
+          { customer_name, address, mobile_number, email, district, state },
+          parsedProducts,
+          dispatchLogs,
+          paymentRows,
+          extra_charges || {}
+        );
+        console.log(`PDF generated at: ${generatedPdfPath}`);
+        // Update receipt_id in dbooking table
+        await pool.query('UPDATE public.dbooking SET receipt_id = $1 WHERE order_id = $2', [generatedReceiptId, actualOrderId]);
+      } catch (pdfError) {
+        console.error('PDF generation failed:', pdfError.message, pdfError.stack);
+        throw new Error(`Failed to generate receipt PDF: ${pdfError.message}`);
+      }
+    } else {
+      console.log(`Using existing PDF at: ${pdfPath}`);
+    }
+
+    // Wait briefly to ensure file is written
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Verify file exists before streaming
+    if (!fs.existsSync(pdfPath)) {
+      console.error(`PDF file not found at: ${pdfPath}`);
+      throw new Error('PDF file not found after generation');
+    }
+
+    // Serve the PDF
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=${safeName}-${receiptId}.pdf`);
+    const stream = fs.createReadStream(pdfPath);
+    stream.on('error', (streamError) => {
+      console.error('Error reading PDF file:', streamError.message, streamError.stack);
+      res.status(500).json({ message: 'Failed to read receipt PDF', error: streamError.message });
+    });
+    stream.on('open', () => {
+      console.log('Streaming PDF to client');
+      stream.pipe(res);
+    });
+  } catch (err) {
+    console.error('Error in getReceipt:', err.message, err.stack);
+    res.status(500).json({ message: 'Failed to fetch receipt', error: err.message });
+  }
+};
+
+const generateInvoicePDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = [], extraCharges = {}) => {
   return new Promise((resolve, reject) => {
     if (!bookingData || !customerDetails || !Array.isArray(products)) {
       return reject(new Error('Invalid input: bookingData, customerDetails, and products required'));
@@ -111,7 +342,7 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
         amount: `${parseFloat(payment.amount_paid || 0).toFixed(2)} Cr`,
         date: new Date(payment.created_at).getTime(),
       })),
-    ].sort((a, b) => a.date - b.date); // Sort earliest to latest to match modal
+    ].sort((a, b) => b.date - a.date); // Sort by date, latest to earliest
 
     y += 25;
     tableData.forEach((row, index) => {
@@ -130,7 +361,7 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
       y += 20;
     });
 
-    // Extra Charges
+    // Extra Charges (Tax, P&F, Deduction)
     y += 10;
     if (y > 700) {
       doc.addPage();
@@ -147,7 +378,7 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
       ].filter(Boolean).join('  ');
       doc.font('Helvetica').text(extraText, 450, y, { align: 'right' });
       y += 20;
-      debit += tax + pf - minus;
+      debit = debit + tax + pf - minus;
     }
 
     // Total Row
@@ -175,109 +406,6 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
     stream.on('finish', () => resolve({ pdfPath, calculatedTotal: netBalance }));
     stream.on('error', reject);
   });
-};
-
-exports.getReceipt = async (req, res) => {
-  try {
-    let { order_id } = req.params;
-    console.log(`Processing receipt for order_id: ${order_id}`);
-
-    // Normalize order_id
-    if (order_id.endsWith('.pdf')) {
-      order_id = order_id.replace(/\.pdf$/, '');
-    }
-
-    // Validate order_id
-    const validationError = validateId(order_id);
-    if (validationError) {
-      console.error(`Validation error: ${validationError}`);
-      return res.status(400).json({ message: validationError });
-    }
-
-    // Fetch booking data
-    console.log('Querying dbooking table...');
-    let { rows } = await pool.query(
-      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
-      [order_id]
-    );
-
-    if (!rows.length) {
-      const possibleOrderId = order_id.split('-').slice(1).join('-');
-      ({ rows } = await pool.query(
-        'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
-        [possibleOrderId]
-      ));
-    }
-
-    if (!rows.length) {
-      console.error(`No booking found for order_id: ${order_id} or ${possibleOrderId}`);
-      return res.status(404).json({ message: `Receipt not found for order_id '${order_id}'` });
-    }
-
-    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, order_id: actualOrderId, id: booking_id, extra_charges, created_at } = rows[0];
-    const parsedProducts = parseProducts(products);
-    if (!parsedProducts) {
-      console.error('Failed to parse products:', products);
-      throw new Error('Invalid product data format');
-    }
-
-    // Fetch dispatch logs
-    console.log(`Querying dispatch_logs for order_id: ${actualOrderId}`);
-    const { rows: dispatchLogs } = await pool.query(
-      'SELECT product_name, quantity, dispatched_qty, dispatched_at FROM public.dispatch_logs WHERE order_id = $1 ORDER BY dispatched_at DESC',
-      [actualOrderId]
-    );
-
-    // Fetch payment transactions
-    const { rows: paymentRows } = await pool.query(
-      `SELECT pt.amount_paid, pt.payment_method, pt.created_at, a.username AS admin_username 
-       FROM public.payment_transactions pt 
-       LEFT JOIN public.admin a ON pt.admin_id = a.id 
-       WHERE pt.booking_id = $1 ORDER BY pt.id ASC`,
-      [booking_id]
-    );
-
-    // Generate PDF path
-    const safeName = customer_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const pdfDir = path.join(__dirname, 'receipt');
-    if (!fs.existsSync(pdfDir)) {
-      fs.mkdirSync(pdfDir, { recursive: true });
-    }
-    const pdfPath = path.join(pdfDir, `${safeName}-${actualOrderId}-receipt.pdf`);
-
-    // Check if PDF exists, regenerate if not
-    if (!fs.existsSync(pdfPath)) {
-      try {
-        await generateReceiptPDF(
-          { order_id: actualOrderId, customer_type, total, status, created_at },
-          { customer_name, address, mobile_number, email, district, state },
-          parsedProducts,
-          dispatchLogs,
-          paymentRows,
-          extra_charges || {}
-        );
-      } catch (pdfError) {
-        console.error('PDF generation failed:', pdfError.message);
-        throw new Error(`Failed to generate receipt PDF: ${pdfError.message}`);
-      }
-    } else {
-      console.log('PDF already exists, serving existing file');
-    }
-
-    // Serve the PDF
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${safeName}-${actualOrderId}-receipt.pdf`);
-    const stream = fs.createReadStream(pdfPath);
-    stream.on('error', (streamError) => {
-      console.error('Error reading PDF file:', streamError.message);
-      res.status(500).json({ message: 'Failed to read receipt PDF', error: streamError.message });
-    });
-    stream.pipe(res);
-    console.log('PDF streamed to client');
-  } catch (err) {
-    console.error('Error in getReceipt:', err.message, err.stack);
-    res.status(500).json({ message: 'Failed to fetch receipt', error: err.message });
-  }
 };
 
 exports.getAdmins = async (req, res) => {

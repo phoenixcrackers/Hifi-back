@@ -11,6 +11,17 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
+const drawTableRow = (doc, y, colX, colWidths, values, alignOptions = []) => {
+  values.forEach((val, i) => {
+    const textVal = typeof val === 'object' && val.text ? val.text : val;
+    const align = (alignOptions[i] || 'center');
+    doc.text(textVal, colX[i] + 5, y, { width: colWidths[i] - 10, align });
+  });
+  doc.moveTo(50, y + 15).lineTo(550, y + 15).stroke();
+  colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
+  doc.moveTo(550, y - 5).lineTo(550, y + 15).stroke();
+};
+
 const generateQuotationPDF = (quotationData, customerDetails, products, extraCharges = {}) => {
   return new Promise((resolve, reject) => {
     if (!quotationData || !customerDetails || !Array.isArray(products)) {

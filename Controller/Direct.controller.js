@@ -30,6 +30,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+const drawTableRow = (doc, y, colX, colWidths, values, alignOptions = []) => {
+  values.forEach((val, i) => {
+    const textVal = typeof val === 'object' && val.text ? val.text : val;
+    const align = (alignOptions[i] || 'center');
+    doc.text(textVal, colX[i] + 5, y, { width: colWidths[i] - 10, align });
+  });
+  doc.moveTo(50, y + 15).lineTo(550, y + 15).stroke();
+  colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
+  doc.moveTo(550, y - 5).lineTo(550, y + 15).stroke();
+};
+
 const generateInvoicePDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = [], extraCharges = {}) => {
   return new Promise((resolve, reject) => {
     if (!bookingData || !customerDetails || !Array.isArray(products)) {
