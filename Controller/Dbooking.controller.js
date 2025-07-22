@@ -47,89 +47,7 @@ const drawTableRow = (doc, y, colX, colWidths, values, alignOptions = []) => {
   doc.moveTo(550, y - 5).lineTo(550, y + 15).stroke();
 };
 
-const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges = {}) => {
-  return new Promise((resolve, reject) => {
-    if (!bookingData || !customerDetails || !Array.isArray(products)) {
-      return reject(new Error('Invalid input: bookingData, customerDetails, and products required'));
-    }
-
-    const doc = new PDFDocument({ margin: 50 });
-    const safeName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const pdfPath = path.join(__dirname, '../pdf_data', `${safeName}-${bookingData.order_id || 'unknown'}.pdf`);
-    const stream = fs.createWriteStream(pdfPath);
-    doc.pipe(stream);
-
-    doc.fontSize(20).font('Helvetica-Bold').text('Invoice', 50, 50, { align: 'center' });
-    doc.fontSize(12).font('Helvetica')
-      .text('Hifi Pyro Park', 50, 80, { align: 'center' })
-      .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
-      .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' })
-      .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 50, 160)
-      .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 50, 175)
-      .text(`Address: ${customerDetails.address || 'N/A'}`, 50, 190)
-      .text(`District: ${customerDetails.district || 'N/A'}`, 300, 160, { align: 'right' })
-      .text(`State: ${customerDetails.state || 'N/A'}`, 300, 175, { align: 'right' })
-      .text(`Customer Type: ${bookingData.customer_type || 'User'}`, 300, 190, { align: 'right' })
-      .text(`Order ID: ${bookingData.order_id || 'N/A'}`, 300, 205, { align: 'right' });
-
-    const tableY = 250, colWidths = [50, 150, 80, 80, 60, 80], colX = [50, 100, 250, 330, 410, 470];
-    doc.moveTo(50, tableY - 5).lineTo(550, tableY - 5).stroke();
-    drawTableRow(doc, tableY, colX, colWidths, ['Sl No', 'Product', 'Quantity', 'Price', 'Per', 'Total']);
-
-    let y = tableY + 25, total = 0;
-    products.forEach((product, index) => {
-      const price = parseFloat(product.price) || 0;
-      const discount = parseFloat(product.discount || 0);
-      const productTotal = (price - (price * discount / 100)) * (product.quantity || 0);
-      total += productTotal;
-      drawTableRow(doc, y, colX, colWidths, [
-        index + 1,
-        product.productname || 'N/A',
-        product.quantity || 0,
-        `Rs.${price.toFixed(2)}`,
-        product.per || 'N/A',
-        `Rs.${productTotal.toFixed(2)}`,
-      ]);
-      y += 20;
-    });
-
-    y += 10;
-    const tax = parseFloat(extraCharges.tax || 0);
-    const pf = parseFloat(extraCharges.pf || 0);
-    const minus = parseFloat(extraCharges.minus || 0);
-    if (tax || pf || minus) {
-      const extraText = [
-        tax ? `Tax: Rs.${tax.toFixed(2)}` : '',
-        pf ? `P&F: Rs.${pf.toFixed(2)}` : '',
-        minus ? `Deduction: -Rs.${minus.toFixed(2)}` : '',
-      ].filter(Boolean).join('  ');
-      doc.font('Helvetica').text(extraText, 450, y, { align: 'right' });
-      y += 20;
-      total = total + tax + pf - minus;
-    }
-
-    doc.font('Helvetica-Bold').text(`Grand Total: Rs.${total.toFixed(2)}`, 450, y, { align: 'right' });
-    doc.end();
-    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: total }));
-    stream.on('error', reject);
-  });
-};
-
-exports.getAdmins = async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT id, username, bank_name FROM public.admin');
-    const admins = await Promise.all(rows.map(async admin => ({
-      ...admin,
-      total: (await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total FROM public.payment_transactions WHERE admin_id = $1', [admin.id])).rows[0].total,
-    })));
-    res.json(admins);
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch admins', error: err.message });
-  }
-};
-
-const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = []) => {
+const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = [], extraCharges = {}) => {
   return new Promise((resolve, reject) => {
     if (!bookingData || !customerDetails || !Array.isArray(products)) {
       return reject(new Error('Invalid input: bookingData, customerDetails, and products required'));
@@ -154,112 +72,107 @@ const generateReceiptPDF = (bookingData, customerDetails, products, dispatchLogs
       .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' })
       .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 50, 160)
       .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 50, 175)
-      .text(`Address: ${customerDetails.address || 'N/A'}`, 50, 205)
-      .text(`District: ${customerDetails.district || 'N/A'}`, 300, 160, { align: 'right' })
-      .text(`State: ${customerDetails.state || 'N/A'}`, 300, 175, { align: 'right' })
-      .text(`Order ID: ${bookingData.order_id || 'N/A'}`, 300, 190, { align: 'right' })
-      .text(`Status: ${bookingData.status || 'N/A'}`, 300, 205, { align: 'right' });
+      .text(`Address: ${customerDetails.address || 'N/A'}, ${customerDetails.district || 'N/A'}, ${customerDetails.state || 'N/A'}`, 50, 190)
+      .text(`Order ID: ${bookingData.order_id || 'N/A'}`, 300, 160, { align: 'right' })
+      .text(`Order Date: ${new Date(bookingData.created_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 175, { align: 'right' })
+      .text(`Status: ${bookingData.status || 'N/A'}`, 300, 190, { align: 'right' });
 
-    // Product Table
+    // Receipt Table
     let y = 250;
-    const productColWidths = [50, 150, 80, 80, 60, 80];
-    const productColX = [50, 100, 250, 330, 410, 470];
-    doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
-    drawTableRow(doc, y, productColX, productColWidths, ['Sl No', 'Product', 'Quantity', 'Price', 'Per', 'Total']);
+    const colWidths = [50, 200, 80, 80, 80, 80];
+    const colX = [50, 100, 300, 380, 460, 540];
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, ['Sl.No', 'Description', 'Quantity', 'Rate/Box (₹)', 'Date', 'Amount (₹)'], ['center', 'left', 'right', 'right', 'right', 'right']);
+
+    // Calculate debit and credit
+    let debit = 0;
+    const tableData = [
+      ...dispatchLogs.map((log, index) => {
+        const prod = products[log.product_index];
+        const price = prod ? parseFloat(prod.price) || 0 : 0;
+        const discount = prod ? parseFloat(prod.discount || 0) : 0;
+        const effectivePrice = price - (price * discount / 100);
+        const amount = effectivePrice * (log.dispatched_qty || 0);
+        debit += amount;
+        return {
+          slNo: index + 1,
+          productName: log.product_name || 'N/A',
+          quantity: log.dispatched_qty || 0,
+          ratePerBox: effectivePrice.toFixed(2),
+          amount: `${amount.toFixed(2)} Dr`,
+          date: new Date(log.dispatched_at).getTime(),
+        };
+      }),
+      ...payments.map((payment, index) => ({
+        slNo: dispatchLogs.length + index + 1,
+        productName: `Payment (${payment.payment_method || 'N/A'})`,
+        quantity: '-',
+        ratePerBox: '-',
+        amount: `${parseFloat(payment.amount_paid || 0).toFixed(2)} Cr`,
+        date: new Date(payment.created_at).getTime(),
+      })),
+    ].sort((a, b) => a.date - b.date); // Sort earliest to latest to match modal
 
     y += 25;
-    let productTotal = 0;
-    products.forEach((product, index) => {
+    tableData.forEach((row, index) => {
       if (y > 700) {
         doc.addPage();
         y = 50;
       }
-      const price = parseFloat(product.price) || 0;
-      const discount = parseFloat(product.discount || 0);
-      const productTotalValue = (price - (price * discount / 100)) * (product.quantity || 0);
-      productTotal += productTotalValue;
-      drawTableRow(doc, y, productColX, productColWidths, [
-        index + 1,
-        product.productname || 'N/A',
-        product.quantity || 0,
-        `Rs.${price.toFixed(0)}`,
-        product.per || 'N/A',
-        `Rs.${productTotalValue.toFixed(0)}`,
-      ]);
+      drawTableRow(doc, y, colX, colWidths, [
+        row.slNo,
+        row.productName,
+        row.quantity,
+        row.ratePerBox,
+        new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        row.amount,
+      ], ['center', 'left', 'right', 'right', 'right', row.amount.includes('Dr') ? 'right' : 'right']);
       y += 20;
     });
 
-    // Dispatch Logs Table
-    y += 30;
+    // Extra Charges
+    y += 10;
     if (y > 700) {
       doc.addPage();
       y = 50;
     }
-    doc.fontSize(14).font('Helvetica').text('Dispatch Logs', 50, y);
-    y += 20;
-    const dispatchColWidths = [50, 150, 80, 80, 150];
-    const dispatchColX = [50, 100, 250, 330, 410];
-    doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
-    drawTableRow(doc, y, dispatchColX, dispatchColWidths, ['Sl No', 'Product', 'Booked', 'Total Sent', 'Date']);
-
-    y += 25;
-    dispatchLogs.forEach((log, index) => {
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-      }
-      drawTableRow(doc, y, dispatchColX, dispatchColWidths, [
-        index + 1,
-        log.product_name || 'N/A',
-        log.quantity || '0',
-        log.dispatched_qty || '0',
-        new Date(log.dispatched_at).toLocaleDateString() || 'N/A',
-      ]);
+    const tax = parseFloat(extraCharges.tax || 0);
+    const pf = parseFloat(extraCharges.pf || 0);
+    const minus = parseFloat(extraCharges.minus || 0);
+    if (tax || pf || minus) {
+      const extraText = [
+        tax ? `Tax: Rs.${tax.toFixed(2)}` : '',
+        pf ? `P&F: Rs.${pf.toFixed(2)}` : '',
+        minus ? `Deduction: -Rs.${minus.toFixed(2)}` : '',
+      ].filter(Boolean).join('  ');
+      doc.font('Helvetica').text(extraText, 450, y, { align: 'right' });
       y += 20;
-    });
+      debit += tax + pf - minus;
+    }
 
-    // Payments Table
-    y += 30;
+    // Total Row
+    const credit = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+    const netBalance = credit - debit;
+    const totalQty = products.reduce((sum, p) => sum + Number(p.quantity || 0), 0);
     if (y > 700) {
       doc.addPage();
       y = 50;
     }
-    doc.fontSize(14).font('Helvetica').text('Payments', 50, y);
-    y += 20;
-    const paymentColWidths = [50, 150, 100, 100, 100];
-    const paymentColX = [50, 100, 250, 350, 450];
-    doc.moveTo(50, y - 5).lineTo(550, y - 5).stroke();
-    drawTableRow(doc, y, paymentColX, paymentColWidths, ['Sl No', 'Admin Name', 'Type', 'Received', 'Date']);
-
-    y += 25;
-    let totalReceived = 0;
-    payments.forEach((payment, index) => {
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-      }
-      const amount = parseFloat(payment.amount_paid) || 0;
-      totalReceived += amount;
-      drawTableRow(doc, y, paymentColX, paymentColWidths, [
-        index + 1,
-        payment.admin_username || 'N/A',
-        payment.payment_method || 'N/A',
-        `Rs.${amount.toFixed(0)}`,
-        { text: new Date(payment.created_at).toLocaleDateString(), align: 'center' },
-      ], { alignOptions: [null, null, null, null, 'center'] });
-      y += 20;
-    });
-
-    // Total Received
-    y += 20;
-    if (y > 700) {
-      doc.addPage();
-      y = 50;
-    }
-    doc.font('Helvetica-Bold').text(`Total Received: Rs.${totalReceived.toFixed(0)}`, 450, y, { align: 'right' });
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, [
+      { text: 'Total', colSpan: 2 },
+      totalQty,
+      '-',
+      '-',
+      { text: `${netBalance.toFixed(2)} ${netBalance < 0 ? '(Outstanding)' : '(Advance)'}` },
+    ], ['left', 'left', 'right', 'right', 'right', netBalance < 0 ? 'right' : 'right']);
+    doc.moveTo(50, y - 5).lineTo(300, y - 5).stroke(); // Line for merged "Total" cell
+    doc.moveTo(50, y + 15).lineTo(570, y + 15).stroke();
+    colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
+    doc.moveTo(570, y - 5).lineTo(570, y + 15).stroke();
 
     doc.end();
-    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: totalReceived }));
+    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: netBalance }));
     stream.on('error', reject);
   });
 };
@@ -284,14 +197,14 @@ exports.getReceipt = async (req, res) => {
     // Fetch booking data
     console.log('Querying dbooking table...');
     let { rows } = await pool.query(
-      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id FROM public.dbooking WHERE order_id = $1',
+      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
       [order_id]
     );
 
     if (!rows.length) {
       const possibleOrderId = order_id.split('-').slice(1).join('-');
       ({ rows } = await pool.query(
-        'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id FROM public.dbooking WHERE order_id = $1',
+        'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, pdf, order_id, id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
         [possibleOrderId]
       ));
     }
@@ -301,7 +214,12 @@ exports.getReceipt = async (req, res) => {
       return res.status(404).json({ message: `Receipt not found for order_id '${order_id}'` });
     }
 
-    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, order_id: actualOrderId, id: booking_id } = rows[0];
+    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, status, order_id: actualOrderId, id: booking_id, extra_charges, created_at } = rows[0];
+    const parsedProducts = parseProducts(products);
+    if (!parsedProducts) {
+      console.error('Failed to parse products:', products);
+      throw new Error('Invalid product data format');
+    }
 
     // Fetch dispatch logs
     console.log(`Querying dispatch_logs for order_id: ${actualOrderId}`);
@@ -330,17 +248,13 @@ exports.getReceipt = async (req, res) => {
     // Check if PDF exists, regenerate if not
     if (!fs.existsSync(pdfPath)) {
       try {
-        const parsedProducts = parseProducts(products);
-        if (!parsedProducts) {
-          console.error('Failed to parse products:', products);
-          throw new Error('Invalid product data format');
-        }
         await generateReceiptPDF(
-          { order_id: actualOrderId, customer_type, total, status },
+          { order_id: actualOrderId, customer_type, total, status, created_at },
           { customer_name, address, mobile_number, email, district, state },
           parsedProducts,
           dispatchLogs,
-          paymentRows
+          paymentRows,
+          extra_charges || {}
         );
       } catch (pdfError) {
         console.error('PDF generation failed:', pdfError.message);
@@ -363,6 +277,19 @@ exports.getReceipt = async (req, res) => {
   } catch (err) {
     console.error('Error in getReceipt:', err.message, err.stack);
     res.status(500).json({ message: 'Failed to fetch receipt', error: err.message });
+  }
+};
+
+exports.getAdmins = async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT id, username, bank_name FROM public.admin');
+    const admins = await Promise.all(rows.map(async admin => ({
+      ...admin,
+      total: (await pool.query('SELECT COALESCE(SUM(amount_paid), 0) as total FROM public.payment_transactions WHERE admin_id = $1', [admin.id])).rows[0].total,
+    })));
+    res.json(admins);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch admins', error: err.message });
   }
 };
 

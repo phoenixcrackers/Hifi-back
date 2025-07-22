@@ -133,117 +133,133 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
   });
 };
 
-const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges = {}) => {
+const generateInvoicePDF = (bookingData, customerDetails, products, dispatchLogs = [], payments = [], extraCharges = {}) => {
   return new Promise((resolve, reject) => {
+    if (!bookingData || !customerDetails || !Array.isArray(products)) {
+      return reject(new Error('Invalid input: bookingData, customerDetails, and products required'));
+    }
+
     const doc = new PDFDocument({ margin: 50 });
-    const safeCustomerName = (customerDetails.customer_name || 'unknown')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-    const pdfDir = path.join(__dirname, 'pdf_data');
+    const safeName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const pdfDir = path.join(__dirname, 'receipt');
     if (!fs.existsSync(pdfDir)) {
       fs.mkdirSync(pdfDir, { recursive: true });
     }
-    const pdfPath = path.join(pdfDir, `${safeCustomerName}-${bookingData.order_id}.pdf`);
+    const pdfPath = path.join(pdfDir, `${safeName}-${bookingData.order_id || 'unknown'}-receipt.pdf`);
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
     // Header
-    doc.fontSize(20).font('Helvetica-Bold').text('Invoice', 50, 50, { align: 'center' });
+    doc.fontSize(20).font('Helvetica-Bold').text('Receipt', 50, 50, { align: 'center' });
     doc.fontSize(12).font('Helvetica')
       .text('Hifi Pyro Park', 50, 80, { align: 'center' })
       .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
       .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' });
-
-    // Customer Details (Left and Right)
-    doc.fontSize(12).font('Helvetica')
+      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' })
       .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 50, 160)
       .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 50, 175)
-      .text(`Address: ${customerDetails.address || 'N/A'}`, 50, 190)
-      .text(`District: ${customerDetails.district || 'N/A'}`, 300, 160, { align: 'right' })
-      .text(`State: ${customerDetails.state || 'N/A'}`, 300, 175, { align: 'right' })
-      .text(`Customer Type: ${bookingData.customer_type || 'User'}`, 300, 190, { align: 'right' })
-      .text(`Order ID: ${bookingData.order_id}`, 300, 205, { align: 'right' });
+      .text(`Address: ${customerDetails.address || 'N/A'}, ${customerDetails.district || 'N/A'}, ${customerDetails.state || 'N/A'}`, 50, 190)
+      .text(`Order ID: ${bookingData.order_id || 'N/A'}`, 300, 160, { align: 'right' })
+      .text(`Order Date: ${new Date(bookingData.created_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 175, { align: 'right' })
+      .text(`Status: ${bookingData.status || 'N/A'}`, 300, 190, { align: 'right' });
 
-    // Table Header
-    const tableY = 250;
-    const tableWidth = 500;
-    const colWidths = [200, 100, 100, 100]; // Product, Quantity, Price, Total
-    const colX = [50, 250, 350, 450];
+    // Receipt Table
+    let y = 250;
+    const colWidths = [50, 200, 80, 80, 80, 80];
+    const colX = [50, 100, 300, 380, 460, 540];
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, ['Sl.No', 'Description', 'Quantity', 'Rate/Box (₹)', 'Date', 'Amount (₹)'], ['center', 'left', 'right', 'right', 'right', 'right']);
 
-    // Draw table top border
-    doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
+    // Calculate debit and credit
+    let debit = 0;
+    const tableData = [
+      ...dispatchLogs.map((log, index) => {
+        const prod = products[log.product_index];
+        const price = prod ? parseFloat(prod.price) || 0 : 0;
+        const discount = prod ? parseFloat(prod.discount || 0) : 0;
+        const effectivePrice = price - (price * discount / 100);
+        const amount = effectivePrice * (log.dispatched_qty || 0);
+        debit += amount;
+        return {
+          slNo: index + 1,
+          productName: log.product_name || 'N/A',
+          quantity: log.dispatched_qty || 0,
+          ratePerBox: effectivePrice.toFixed(2),
+          amount: `${amount.toFixed(2)} Dr`,
+          date: new Date(log.dispatched_at).getTime(),
+        };
+      }),
+      ...payments.map((payment, index) => ({
+        slNo: dispatchLogs.length + index + 1,
+        productName: `Payment (${payment.payment_method || 'N/A'})`,
+        quantity: '-',
+        ratePerBox: '-',
+        amount: `${parseFloat(payment.amount_paid || 0).toFixed(2)} Cr`,
+        date: new Date(payment.created_at).getTime(),
+      })),
+    ].sort((a, b) => b.date - a.date); // Sort by date, latest to earliest
 
-    // Table Header
-    doc.fontSize(10).font('Helvetica-Bold')
-      .text('Product', colX[0] + 5, tableY)
-      .text('Quantity', colX[1] + 5, tableY)
-      .text('Price', colX[2] + 5, tableY)
-      .text('Total', colX[3] + 5, tableY);
-
-    // Draw header bottom border
-    doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
-
-    // Draw vertical lines for header
-    colX.forEach((x, i) => {
-      doc.moveTo(x, tableY - 5).lineTo(x, tableY + 15).stroke();
-      if (i === colX.length - 1) {
-        doc.moveTo(x + colWidths[i], tableY - 5).lineTo(x + colWidths[i], tableY + 15).stroke();
+    y += 25;
+    tableData.forEach((row, index) => {
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
       }
-    });
-
-    // Table Rows
-    let y = tableY + 25;
-    let total = 0;
-    products.forEach((product, index) => {
-      const price = parseFloat(product.price);
-      const discount = parseFloat(product.discount || 0);
-      const productTotal = (price - (price * discount / 100)) * product.quantity;
-      total += productTotal;
-
-      // Draw row content
-      doc.font('Helvetica')
-        .text(product.productname, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'left' })
-        .text(product.quantity, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
-        .text(`Rs.${price.toFixed(2)}`, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'left' })
-        .text(`Rs.${productTotal.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' });
-
-      // Draw row bottom border
-      doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
-
-      // Draw vertical lines for row
-      colX.forEach((x, i) => {
-        doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
-        if (i === colX.length - 1) {
-          doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
-        }
-      });
-
+      drawTableRow(doc, y, colX, colWidths, [
+        row.slNo,
+        row.productName,
+        row.quantity,
+        row.ratePerBox,
+        new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        row.amount,
+      ], ['center', 'left', 'right', 'right', 'right', row.amount.includes('Dr') ? 'right' : 'right']);
       y += 20;
     });
 
-    // Extra Charges
+    // Extra Charges (Tax, P&F, Deduction)
     y += 10;
+    if (y > 700) {
+      doc.addPage();
+      y = 50;
+    }
     const tax = parseFloat(extraCharges.tax || 0);
     const pf = parseFloat(extraCharges.pf || 0);
     const minus = parseFloat(extraCharges.minus || 0);
-    let extraChargesText = '';
-    if (tax > 0) extraChargesText += `Tax: Rs.${tax.toFixed(2)}  `;
-    if (pf > 0) extraChargesText += `P&F: Rs.${pf.toFixed(2)}  `;
-    if (minus > 0) extraChargesText += `Deduction: -Rs.${minus.toFixed(2)}  `;
-    if (extraChargesText) {
-      doc.font('Helvetica').text(extraChargesText.trim(), 50, y);
+    if (tax || pf || minus) {
+      const extraText = [
+        tax ? `Tax: Rs.${tax.toFixed(2)}` : '',
+        pf ? `P&F: Rs.${pf.toFixed(2)}` : '',
+        minus ? `Deduction: -Rs.${minus.toFixed(2)}` : '',
+      ].filter(Boolean).join('  ');
+      doc.font('Helvetica').text(extraText, 450, y, { align: 'right' });
       y += 20;
+      debit = debit + tax + pf - minus;
     }
 
-    // Grand Total
-    total = total + tax + pf - minus;
-    doc.font('Helvetica-Bold').text(`Grand Total: Rs.${total.toFixed(2)}`, 450, y, { align: 'right' });
+    // Total Row
+    const credit = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+    const netBalance = credit - debit;
+    const totalQty = products.reduce((sum, p) => sum + Number(p.quantity || 0), 0);
+    if (y > 700) {
+      doc.addPage();
+      y = 50;
+    }
+    doc.moveTo(50, y - 5).lineTo(570, y - 5).stroke();
+    drawTableRow(doc, y, colX, colWidths, [
+      { text: 'Total', colSpan: 2 },
+      totalQty,
+      '-',
+      '-',
+      { text: `${netBalance.toFixed(2)} ${netBalance < 0 ? '(Outstanding)' : '(Advance)'}` },
+    ], ['left', 'left', 'right', 'right', 'right', netBalance < 0 ? 'right' : 'right']);
+    doc.moveTo(50, y - 5).lineTo(300, y - 5).stroke(); // Line for merged "Total" cell
+    doc.moveTo(50, y + 15).lineTo(570, y + 15).stroke();
+    colX.forEach((x, i) => doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke());
+    doc.moveTo(570, y - 5).lineTo(570, y + 15).stroke();
 
     doc.end();
-    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: total }));
-    stream.on('error', (err) => reject(err));
+    stream.on('finish', () => resolve({ pdfPath, calculatedTotal: netBalance }));
+    stream.on('error', reject);
   });
 };
 
