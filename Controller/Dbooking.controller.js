@@ -99,8 +99,7 @@ const generateReceiptPDF = (
       .font("Helvetica")
       .text("Hifi Pyro Park", 50, 110, { align: "left" })
       .text("Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi", 50, 125, { align: "left" })
-      .text("Mobile: +91 63836 59214", 50, 140, { align: "left" })
-      .text("Email: nivasramasamy27@gmail.com", 50, 155, { align: "left" })
+      .text("Mobile:+91 97865 08621, +91 97868 60010", 50, 140, { align: "left" })
       .text(`Customer: ${customerDetails.customer_name || "N/A"}`, 300, 110, { align: "right" })
       .text(`Contact: ${customerDetails.mobile_number || "N/A"}`, 300, 125, { align: "right" })
       .text(`City: ${customerDetails.district || "N/A"}`, 300, 140, { align: "right" })
@@ -900,122 +899,139 @@ exports.getDispatchLogsByOrderId = async (req, res) => {
   }
 }
 
+const validTables = ["gift_box_dealers"]; // Add other valid table names if needed
+
 exports.createBooking = async (req, res) => {
-  const {
-    customer_id,
-    products,
-    total,
-    customer_type,
-    customer_name,
-    address,
-    mobile_number,
-    email,
-    district,
-    state,
-    payment_method,
-    amount_paid,
-    admin_id,
-  } = req.body
-  const order_id = `ORD-${Date.now()}`
-  try {
-    if (!products?.length || total <= 0) return res.status(400).json({ message: "Valid products and total required" })
-    if (
-      payment_method &&
-      (!["cash", "bank"].includes(payment_method) || !amount_paid || amount_paid <= 0 || !admin_id)
-    ) {
-      return res.status(400).json({ message: "Invalid payment details" })
+    const {
+        customer_id,
+        products,
+        total,
+        customer_type,
+        customer_name,
+        address,
+        mobile_number,
+        email,
+        district,
+        state,
+        payment_method,
+        amount_paid,
+        admin_id,
+    } = req.body;
+    const order_id = `ORD-${Date.now()}`;
+
+    try {
+        if (!products?.length || total <= 0) {
+            return res.status(400).json({ message: "Valid products and total required" });
+        }
+        if (
+            payment_method &&
+            (!["cash", "bank"].includes(payment_method) || !amount_paid || amount_paid <= 0 || !admin_id)
+        ) {
+            return res.status(400).json({ message: "Invalid payment details" });
+        }
+
+        let finalCustomerType = customer_type || "User";
+        let customerDetails = { customer_name, address, mobile_number, email, district, state };
+        if (customer_id) {
+            const { rows } = await pool.query(
+                "SELECT customer_name, address, mobile_number, email, district, state, customer_type FROM public.gbcustomers WHERE id = $1",
+                [customer_id],
+            );
+            if (!rows.length) return res.status(404).json({ message: "Customer not found" });
+            customerDetails = rows[0];
+            finalCustomerType = customer_type || rows[0].customer_type || "User";
+        } else if (
+            finalCustomerType !== "User" ||
+            !customer_name ||
+            !address ||
+            !district ||
+            !state ||
+            !mobile_number ||
+            !email
+        ) {
+            return res.status(400).json({ message: "Complete customer details required for non-existing customers" });
+        }
+
+        // Start a transaction
+        await pool.query("BEGIN");
+
+        // Validate products and check stock
+        for (const { id, product_type, quantity } of products) {
+            if (!id || !product_type || quantity < 1) {
+                await pool.query("ROLLBACK");
+                return res.status(400).json({ message: "Invalid product data" });
+            }
+            const tableName = product_type.toLowerCase().replace(/\s+/g, "_");
+            if (!validTables.includes(tableName)) {
+                await pool.query("ROLLBACK");
+                return res.status(400).json({ message: `Invalid product_type: ${product_type}. Must be one of ${validTables.join(", ")}` });
+            }
+            const { rows } = await pool.query(`SELECT id, stock FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [
+                id,
+            ]);
+            if (!rows.length) {
+                await pool.query("ROLLBACK");
+                return res.status(404).json({ message: `Product ${id} not found` });
+            }
+            if (quantity > rows[0].stock) {
+                await pool.query("ROLLBACK");
+                return res.status(400).json({ message: `Insufficient stock for product ${id}` });
+            }
+        }
+
+        // Update stock for each product
+        for (const { id, product_type, quantity } of products) {
+            const tableName = product_type.toLowerCase().replace(/\s+/g, "_");
+            await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
+        }
+
+        // Generate PDF
+        const { pdfPath } = await generateInvoicePDF(
+            { order_id, customer_type: finalCustomerType, total },
+            customerDetails,
+            products,
+        );
+
+        // Insert booking
+        const { rows } = await pool.query(
+            `INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'booked', NOW(), $12, $13, $14, $15) RETURNING id, created_at, customer_type, pdf, order_id`,
+            [
+                customer_id || null,
+                order_id,
+                JSON.stringify(products),
+                Number.parseFloat(total),
+                customerDetails.address || null,
+                customerDetails.mobile_number || null,
+                customerDetails.customer_name || null,
+                customerDetails.email || null,
+                customerDetails.district || null,
+                customerDetails.state || null,
+                finalCustomerType,
+                pdfPath,
+                payment_method || null,
+                Number.parseFloat(amount_paid) || 0,
+                admin_id || null,
+            ],
+        );
+
+        // Insert payment transaction if applicable
+        if (payment_method && amount_paid) {
+            await pool.query(
+                "INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date) VALUES ($1, $2, $3, $4, NOW())",
+                [rows[0].id, Number.parseFloat(amount_paid), payment_method, admin_id],
+            );
+        }
+
+        // Commit transaction
+        await pool.query("COMMIT");
+        res.status(201).json({ message: "Booking created successfully", ...rows[0] });
+    } catch (err) {
+        await pool.query("ROLLBACK");
+        console.error("Error in createBooking:", err.message);
+        res.status(500).json({ message: "Failed to create booking", error: err.message });
     }
-    let finalCustomerType = customer_type || "User"
-    let customerDetails = { customer_name, address, mobile_number, email, district, state }
-    if (customer_id) {
-      const { rows } = await pool.query(
-        "SELECT customer_name, address, mobile_number, email, district, state, customer_type FROM public.gbcustomers WHERE id = $1",
-        [customer_id],
-      )
-      if (!rows.length) return res.status(404).json({ message: "Customer not found" })
-      customerDetails = rows[0]
-      finalCustomerType = customer_type || rows[0].customer_type || "User"
-    } else if (
-      finalCustomerType !== "User" ||
-      !customer_name ||
-      !address ||
-      !district ||
-      !state ||
-      !mobile_number ||
-      !email
-    ) {
-      return res.status(400).json({ message: "Complete customer details required for non-existing customers" })
-    }
-    // Start a transaction
-    await pool.query("BEGIN")
-    // Validate products and check stock
-    for (const { id, product_type, quantity } of products) {
-      if (!id || !product_type || quantity < 1) {
-        await pool.query("ROLLBACK")
-        return res.status(400).json({ message: "Invalid product data" })
-      }
-      const tableName = product_type.toLowerCase().replace(/\s+/g, "_")
-      const { rows } = await pool.query(`SELECT id, stock FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [
-        id,
-      ])
-      if (!rows.length) {
-        await pool.query("ROLLBACK")
-        return res.status(404).json({ message: `Product ${id} not found` })
-      }
-      if (quantity > rows[0].stock) {
-        await pool.query("ROLLBACK")
-        return res.status(400).json({ message: `Insufficient stock for product ${id}` })
-      }
-    }
-    // Update stock for each product
-    for (const { id, product_type, quantity } of products) {
-      const tableName = product_type.toLowerCase().replace(/\s+/g, "_")
-      await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id])
-    }
-    // Generate PDF
-    const { pdfPath } = await generateInvoicePDF(
-      { order_id, customer_type: finalCustomerType, total },
-      customerDetails,
-      products,
-    )
-    // Insert booking
-    const { rows } = await pool.query(
-      `INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'booked', NOW(), $12, $13, $14, $15) RETURNING id, created_at, customer_type, pdf, order_id`,
-      [
-        customer_id || null,
-        order_id,
-        JSON.stringify(products),
-        Number.parseFloat(total),
-        customerDetails.address || null,
-        customerDetails.mobile_number || null,
-        customerDetails.customer_name || null,
-        customerDetails.email || null,
-        customerDetails.district || null,
-        customerDetails.state || null,
-        finalCustomerType,
-        pdfPath,
-        payment_method || null,
-        Number.parseFloat(amount_paid) || 0,
-        admin_id || null,
-      ],
-    )
-    // Insert payment transaction if applicable
-    if (payment_method && amount_paid) {
-      await pool.query(
-        "INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date) VALUES ($1, $2, $3, $4, NOW())",
-        [rows[0].id, Number.parseFloat(amount_paid), payment_method, admin_id],
-      )
-    }
-    // Commit transaction
-    await pool.query("COMMIT")
-    res.status(201).json({ message: "Booking created successfully", ...rows[0] })
-  } catch (err) {
-    await pool.query("ROLLBACK")
-    console.error("Error in createBooking:", err.message)
-    res.status(500).json({ message: "Failed to create booking", error: err.message })
-  }
-}
+};
 
 exports.getInvoice = async (req, res) => {
   try {
