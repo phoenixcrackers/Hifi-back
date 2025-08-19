@@ -656,30 +656,33 @@ exports.updateBookingStatus = async (req, res) => {
     payment_method,
     amount_paid,
     admin_id,
-    bank_account, // New field for bank account selection
+    bank_account,
   } = req.body;
+
   try {
-    if (validateId(id, "booking ID")) return res.status(400).json({ error: validateId(id, "booking ID") });
+    if (validateId(id, "booking ID")) {
+      return res.status(400).json({ error: validateId(id, "booking ID") });
+    }
+
     const { rows } = await pool.query(
       "SELECT products, dispatched_qty, total, amount_paid FROM public.dbooking WHERE id = $1",
-      [id],
+      [id]
     );
     if (!rows.length) return res.status(404).json({ error: "Booking not found" });
+
     const booking = rows[0];
     const products = parseProducts(booking.products);
     if (!products) return res.status(400).json({ error: "Invalid product data format" });
-    let updateQuery = "UPDATE public.dbooking SET status = $1";
-    const updateValues = [status];
-    let paramCount = 2;
 
-    if (status === "paid") {
-      if (
-        !["cash", "bank"].includes(payment_method) ||
-        !amount_paid ||
-        Number.parseFloat(amount_paid) <= 0 ||
-        !admin_id
-      ) {
-        return res.status(400).json({ error: "Invalid payment method, amount, or admin ID" });
+    let updateQuery = "UPDATE public.dbooking SET";
+    const updateValues = [];
+    let paramCount = 1;
+    let hasUpdates = false;
+
+    // Handle payments (independent of status)
+    if (amount_paid && Number.parseFloat(amount_paid) > 0) {
+      if (!["cash", "bank"].includes(payment_method) || !admin_id) {
+        return res.status(400).json({ error: "Invalid payment method or admin ID" });
       }
       const total = Number.parseFloat(booking.total) || 0;
       const currentPaid = Number.parseFloat(booking.amount_paid) || 0;
@@ -687,7 +690,7 @@ exports.updateBookingStatus = async (req, res) => {
         return res.status(400).json({ error: "Amount paid exceeds remaining balance" });
       }
 
-      // Validate bank_account if payment_method is "bank"
+      // Validate bank_account if payment is bank
       if (payment_method === "bank" && bank_account) {
         const adminResult = await pool.query(
           "SELECT bank_name FROM public.admin WHERE id = $1",
@@ -702,42 +705,73 @@ exports.updateBookingStatus = async (req, res) => {
         }
       }
 
-      updateQuery += `, amount_paid = COALESCE(amount_paid, 0) + $${paramCount++}, payment_method = $${paramCount++}, admin_id = $${paramCount++}`;
+      updateQuery += ` amount_paid = COALESCE(amount_paid, 0) + $${paramCount++}, payment_method = $${paramCount++}, admin_id = $${paramCount++}`;
       updateValues.push(Number.parseFloat(amount_paid), payment_method, admin_id);
+      hasUpdates = true;
+
+      // Insert payment transaction
       await pool.query(
         "INSERT INTO public.payment_transactions (booking_id, amount_paid, payment_method, admin_id, transaction_date, bank_name) VALUES ($1, $2, $3, $4, NOW(), $5)",
         [id, Number.parseFloat(amount_paid), payment_method, admin_id, bank_account || null]
       );
-    } else if (["dispatched", "delivered"].includes(status)) {
-      const totalQty = products.reduce((sum, p) => sum + (Number.parseInt(p.quantity) || 0), 0);
-      const currentDispatched = Number.parseInt(booking.dispatched_qty || 0);
-      const newDispatchQty = Number.parseInt(dispatched_qty || 0);
-      if (!dispatched_qty || newDispatchQty <= 0 || currentDispatched + newDispatchQty > totalQty) {
-        return res.status(400).json({ error: "Invalid dispatch quantity" });
-      }
-      updateQuery += `, dispatched_qty = $${paramCount++}`;
-      updateValues.push(currentDispatched + newDispatchQty);
-      if (transport_type) {
-        updateQuery += `, transport_type = $${paramCount++}`;
-        updateValues.push(transport_type);
-        if (transport_type === "transport") {
-          if (transport_name) (updateQuery += `, transport_name = $${paramCount++}`), updateValues.push(transport_name);
-          if (transport_contact)
-            (updateQuery += `, transport_contact = $${paramCount++}`), updateValues.push(transport_contact);
-          if (lr_number) (updateQuery += `, lr_number = $${paramCount++}`), updateValues.push(lr_number);
-        }
-      }
-    } else {
-      return res.status(400).json({ error: "Invalid status value" });
     }
+
+    // Handle status changes (only if provided)
+    if (status) {
+      if (status === "paid") {
+        // no need to set status automatically here, handled above if payments
+        updateQuery += `${hasUpdates ? "," : ""} status = $${paramCount++}`;
+        updateValues.push(status);
+        hasUpdates = true;
+      } else if (["dispatched", "delivered"].includes(status)) {
+        const totalQty = products.reduce((sum, p) => sum + (Number.parseInt(p.quantity) || 0), 0);
+        const currentDispatched = Number.parseInt(booking.dispatched_qty || 0);
+        const newDispatchQty = Number.parseInt(dispatched_qty || 0);
+        if (!dispatched_qty || newDispatchQty <= 0 || currentDispatched + newDispatchQty > totalQty) {
+          return res.status(400).json({ error: "Invalid dispatch quantity" });
+        }
+        updateQuery += `${hasUpdates ? "," : ""} status = $${paramCount++}, dispatched_qty = $${paramCount++}`;
+        updateValues.push(status, currentDispatched + newDispatchQty);
+        hasUpdates = true;
+
+        if (transport_type) {
+          updateQuery += `, transport_type = $${paramCount++}`;
+          updateValues.push(transport_type);
+          if (transport_type === "transport") {
+            if (transport_name) {
+              updateQuery += `, transport_name = $${paramCount++}`;
+              updateValues.push(transport_name);
+            }
+            if (transport_contact) {
+              updateQuery += `, transport_contact = $${paramCount++}`;
+              updateValues.push(transport_contact);
+            }
+            if (lr_number) {
+              updateQuery += `, lr_number = $${paramCount++}`;
+              updateValues.push(lr_number);
+            }
+          }
+        }
+      } else {
+        return res.status(400).json({ error: "Invalid status value" });
+      }
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No valid updates provided" });
+    }
+
     updateQuery += ` WHERE id = $${paramCount}`;
     updateValues.push(id);
+
     await pool.query(updateQuery, updateValues);
-    res.json({ message: "Booking status updated successfully" });
+
+    res.json({ message: "Booking updated successfully" });
   } catch (err) {
     res.status(500).json({ error: "Failed to update booking status" });
   }
 };
+
 
 exports.updateBookingStatusByOrderId = async (req, res) => {
   const { order_id } = req.params
