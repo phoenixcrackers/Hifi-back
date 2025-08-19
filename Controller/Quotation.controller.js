@@ -153,8 +153,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
     doc.fontSize(12).font('Helvetica')
       .text('Hifi Pyro Park', 50, 80, { align: 'center' })
       .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
-      .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' });
+      .text("Mobile: +91 97865 08621, +91 97868 60010", 50, 140, { align: "left" })
 
     // Customer Details (Left and Right)
     doc.fontSize(12).font('Helvetica')

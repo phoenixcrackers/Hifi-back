@@ -1,4 +1,12 @@
 const { Pool } = require('pg');
+const cloudinary = require('cloudinary').v2;
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -9,8 +17,10 @@ const pool = new Pool({
 });
 
 exports.addGiftBoxProduct = async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { serial_number, productname, price, per, discount, stock, product_type, imageBase64 } = req.body;
+    const { serial_number, productname, price, per, discount, stock, product_type, existingImages } = req.body;
+    const files = req.files || [];
 
     if (!serial_number || !productname || !price || !per || !discount || !product_type || stock === undefined || stock === null) {
       return res.status(400).json({ message: 'All required fields must be provided' });
@@ -24,23 +34,39 @@ exports.addGiftBoxProduct = async (req, res) => {
       return res.status(400).json({ message: 'Valid per value (pieces, box, or pkt) is required' });
     }
 
-    if (stock < 0) {
+    const priceNum = Number.parseFloat(price);
+    const discountNum = Number.parseFloat(discount);
+    const stockNum = Number.parseInt(stock);
+
+    if (isNaN(priceNum) || priceNum < 0) {
+      return res.status(400).json({ message: 'Price must be a valid positive number' });
+    }
+    if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
+      return res.status(400).json({ message: 'Discount must be between 0 and 100%' });
+    }
+    if (isNaN(stockNum) || stockNum < 0) {
       return res.status(400).json({ message: 'Stock cannot be negative' });
     }
 
-    if (imageBase64 && !imageBase64.match(/^data:image\/(png|jpeg|jpg);base64,/)) {
-      return res.status(400).json({ message: 'Invalid Base64 image format. Must be PNG or JPEG.' });
-    }
+    // Parse existingImages if provided
+    const finalImages = existingImages
+      ? typeof existingImages === 'string'
+        ? JSON.parse(existingImages)
+        : existingImages
+      : [];
+    
+    // Add Cloudinary URLs from uploaded files
+    finalImages.push(...files.map((file) => file.path));
 
     const tableName = 'gift_box_dealers';
 
-    const typeCheck = await pool.query(
+    const typeCheck = await client.query(
       'SELECT product_type FROM public.products WHERE product_type = $1',
       [product_type]
     );
 
     if (typeCheck.rows.length === 0) {
-      await pool.query(
+      await client.query(
         'INSERT INTO public.products (product_type) VALUES ($1)',
         [product_type]
       );
@@ -59,9 +85,8 @@ exports.addGiftBoxProduct = async (req, res) => {
           fast_running BOOLEAN DEFAULT false
         )
       `;
-      await pool.query(tableSchema);
+      await client.query(tableSchema);
 
-      // Create stock history table
       const stockHistorySchema = `
         CREATE TABLE IF NOT EXISTS public.gift_box_dealers_stock_history (
           id SERIAL PRIMARY KEY,
@@ -70,10 +95,10 @@ exports.addGiftBoxProduct = async (req, res) => {
           added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `;
-      await pool.query(stockHistorySchema);
+      await client.query(stockHistorySchema);
     }
 
-    const duplicateCheck = await pool.query(
+    const duplicateCheck = await client.query(
       `SELECT id FROM public.${tableName} 
        WHERE serial_number = $1 OR productname = $2`,
       [serial_number, productname]
@@ -88,20 +113,33 @@ exports.addGiftBoxProduct = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING id
     `;
-    const values = [serial_number, productname, parseFloat(price), per, parseFloat(discount), parseInt(stock), imageBase64 || null, 'off'];
+    const values = [
+      serial_number,
+      productname,
+      priceNum,
+      per,
+      discountNum,
+      stockNum,
+      finalImages.length > 0 ? JSON.stringify(finalImages) : null,
+      'off',
+    ];
 
-    const result = await pool.query(query, values);
+    const result = await client.query(query, values);
     res.status(201).json({ message: 'Product saved successfully', id: result.rows[0].id });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to save product' });
+    console.error('Error in addGiftBoxProduct:', err);
+    res.status(500).json({ message: 'Failed to save product', error: err.message });
+  } finally {
+    client.release();
   }
 };
 
 exports.updateGiftBoxProduct = async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { serial_number, productname, price, per, discount, stock, status, imageBase64 } = req.body;
+    const { serial_number, productname, price, per, discount, stock, status, existingImages } = req.body;
+    const files = req.files || [];
 
     if (!serial_number || !productname || !price || !per || !discount || stock === undefined || stock === null) {
       return res.status(400).json({ message: 'All required fields must be provided' });
@@ -111,26 +149,64 @@ exports.updateGiftBoxProduct = async (req, res) => {
       return res.status(400).json({ message: 'Valid per value (pieces, box, or pkt) is required' });
     }
 
-    if (stock < 0) {
+    const priceNum = Number.parseFloat(price);
+    const discountNum = Number.parseFloat(discount);
+    const stockNum = Number.parseInt(stock);
+
+    if (isNaN(priceNum) || priceNum < 0) {
+      return res.status(400).json({ message: 'Price must be a valid positive number' });
+    }
+    if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
+      return res.status(400).json({ message: 'Discount must be between 0 and 100%' });
+    }
+    if (isNaN(stockNum) || stockNum < 0) {
       return res.status(400).json({ message: 'Stock cannot be negative' });
     }
 
-    if (imageBase64 && !imageBase64.match(/^data:image\/(png|jpeg|jpg);base64,/)) {
-      return res.status(400).json({ message: 'Invalid Base64 image format. Must be PNG or JPEG.' });
+    // Parse existingImages if provided
+    let finalImages = [];
+    if (existingImages) {
+      try {
+        finalImages = typeof existingImages === 'string' ? JSON.parse(existingImages) : existingImages;
+      } catch (e) {
+        console.error('Error parsing existing images:', e);
+        finalImages = [];
+      }
+    }
+
+    // Add new Cloudinary URLs from uploaded files
+    if (files.length > 0) {
+      finalImages = [...finalImages, ...files.map((file) => file.path)];
+    }
+
+    // Delete removed images from Cloudinary
+    const currentProduct = await client.query(
+      `SELECT image FROM public.gift_box_dealers WHERE id = $1`,
+      [id]
+    );
+    if (currentProduct.rows.length > 0 && currentProduct.rows[0].image) {
+      const currentImages = JSON.parse(currentProduct.rows[0].image) || [];
+      const imagesToDelete = currentImages.filter((url) => !finalImages.includes(url));
+      for (const url of imagesToDelete) {
+        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
+        if (publicId) {
+          await cloudinary.uploader.destroy(`hifi_products/${publicId}`, {
+            resource_type: url.includes('/video/') ? 'video' : 'image',
+          });
+        }
+      }
     }
 
     let query = `
       UPDATE public.gift_box_dealers 
       SET serial_number = $1, productname = $2, price = $3, per = $4, discount = $5, stock = $6
     `;
-    const values = [serial_number, productname, parseFloat(price), per, parseFloat(discount), parseInt(stock)];
+    const values = [serial_number, productname, priceNum, per, discountNum, stockNum];
     let paramIndex = 7;
 
-    if (imageBase64 !== undefined) {
-      query += `, image = $${paramIndex}`;
-      values.push(imageBase64 || null);
-      paramIndex++;
-    }
+    query += `, image = $${paramIndex}`;
+    values.push(finalImages.length > 0 ? JSON.stringify(finalImages) : null);
+    paramIndex++;
 
     if (status && ['on', 'off'].includes(status)) {
       query += `, status = $${paramIndex}`;
@@ -141,17 +217,61 @@ exports.updateGiftBoxProduct = async (req, res) => {
     query += ` WHERE id = $${paramIndex} RETURNING id`;
     values.push(id);
 
-    const result = await pool.query(query, values);
+    const result = await client.query(query, values);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
     res.status(200).json({ message: 'Product updated successfully' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to update product' });
+    console.error('Error in updateGiftBoxProduct:', err);
+    res.status(500).json({ message: 'Failed to update product', error: err.message });
+  } finally {
+    client.release();
   }
 };
 
+exports.deleteGiftBoxProduct = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const result = await client.query(
+      `SELECT image FROM public.gift_box_dealers WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    // Delete images from Cloudinary
+    if (result.rows[0].image) {
+      const images = JSON.parse(result.rows[0].image) || [];
+      for (const url of images) {
+        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
+        if (publicId) {
+          await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
+            resource_type: url.includes('/video/') ? 'video' : 'image',
+          });
+        }
+      }
+    }
+
+    const query = `DELETE FROM public.gift_box_dealers WHERE id = $1 RETURNING id`;
+    const deleteResult = await client.query(query, [id]);
+    if (deleteResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    res.status(200).json({ message: 'Product deleted successfully' });
+  } catch (err) {
+    console.error('Error in deleteGiftBoxProduct:', err);
+    res.status(500).json({ message: 'Failed to delete product', error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// Unchanged functions
 exports.bookProduct = async (req, res) => {
   try {
     const { id } = req.params;
@@ -183,8 +303,8 @@ exports.bookProduct = async (req, res) => {
 
     res.status(200).json({ message: 'Product booked successfully', newStock });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to book product' });
+    console.error('Error in bookProduct:', err);
+    res.status(500).json({ message: 'Failed to book product', error: err.message });
   }
 };
 
@@ -211,8 +331,8 @@ exports.toggleGiftBoxFastRunning = async (req, res) => {
 
     res.status(200).json({ message: 'Fast running status updated', fast_running: updated });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to update fast running status' });
+    console.error('Error in toggleGiftBoxFastRunning:', err);
+    res.status(500).json({ message: 'Failed to update fast running status', error: err.message });
   }
 };
 
@@ -239,23 +359,8 @@ exports.getGiftBoxProducts = async (req, res) => {
 
     res.status(200).json(products);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to fetch gift box products' });
-  }
-};
-
-exports.deleteGiftBoxProduct = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const query = `DELETE FROM public.gift_box_dealers WHERE id = $1 RETURNING id`;
-    const result = await pool.query(query, [id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-    res.status(200).json({ message: 'Product deleted successfully' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to delete product' });
+    console.error('Error in getGiftBoxProducts:', err);
+    res.status(500).json({ message: 'Failed to fetch gift box products', error: err.message });
   }
 };
 
@@ -282,8 +387,8 @@ exports.toggleGiftBoxProductStatus = async (req, res) => {
 
     res.status(200).json({ message: 'Status toggled successfully', status: newStatus });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to toggle status' });
+    console.error('Error in toggleGiftBoxProductStatus:', err);
+    res.status(500).json({ message: 'Failed to toggle status', error: err.message });
   }
 };
 
@@ -326,8 +431,8 @@ exports.addStock = async (req, res) => {
     res.status(200).json({ message: 'Stock added successfully', newStock });
   } catch (err) {
     await pool.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ message: 'Failed to add stock' });
+    console.error('Error in addStock:', err);
+    res.status(500).json({ message: 'Failed to add stock', error: err.message });
   }
 };
 
@@ -344,7 +449,7 @@ exports.getStockHistory = async (req, res) => {
     const result = await pool.query(query, [id]);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to fetch stock history' });
+    console.error('Error in getStockHistory:', err);
+    res.status(500).json({ message: 'Failed to fetch stock history', error: err.message });
   }
 };
