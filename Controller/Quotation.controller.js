@@ -668,3 +668,134 @@ exports.cancelQuotation = async (req, res) => {
     res.status(500).json({ message: 'Failed to cancel quotation', error: err.message });
   }
 };
+// Delete Quotation (with booking + stock restore)
+exports.deleteQuotation = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { est_id } = req.params;
+
+    if (!est_id || !est_id.startsWith("EST")) {
+      return res.status(400).json({ message: "Valid est_id is required" });
+    }
+
+    // Begin transaction
+    await client.query("BEGIN");
+
+    // 1. Get quotation first
+    const quotationRes = await client.query(
+      `SELECT est_id, status, products, pdf 
+       FROM public.quotations 
+       WHERE est_id = $1`,
+      [est_id]
+    );
+
+    if (quotationRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    const quotation = quotationRes.rows[0];
+
+    // Parse products safely
+    let products = [];
+    try {
+      products =
+        typeof quotation.products === "string"
+          ? JSON.parse(quotation.products)
+          : quotation.products;
+    } catch (e) {
+      console.error("❌ Failed to parse products JSON:", e.message);
+      products = [];
+    }
+    if (!Array.isArray(products)) products = [];
+
+    // 2. If booked → remove booking + restore stock
+    if (quotation.status === "booked") {
+      const order_id = est_id.replace(/^EST/, "DORD");
+
+      // Get booking to ensure exists
+      const bookingRes = await client.query(
+        `SELECT id FROM public.dbooking WHERE order_id = $1`,
+        [order_id]
+      );
+
+      if (bookingRes.rows.length > 0) {
+        // Restore stock for each product
+        for (const product of products) {
+          const { id, product_type, quantity } = product;
+          if (!id || !product_type || !quantity) continue;
+
+          const tableName = product_type.toLowerCase().replace(/\s+/g, "_");
+          const productId = parseInt(id, 10);
+          if (Number.isNaN(productId)) {
+            console.warn(`⚠️ Skipping invalid product ID:`, product);
+            continue;
+          }
+
+          try {
+            const result = await client.query(
+              `UPDATE public.${tableName} 
+               SET stock = stock + $1 
+               WHERE id = $2 
+               RETURNING id`,
+              [quantity, productId]
+            );
+
+            if (result.rows.length === 0) {
+              console.warn(
+                `⚠️ No product found in ${tableName} with id=${productId}`
+              );
+            } else {
+              console.log(
+                `✅ Stock restored for ${tableName} id=${productId}, qty=${quantity}`
+              );
+            }
+          } catch (stockErr) {
+            console.error(
+              `❌ Stock restore failed for ${tableName} id=${id}:`,
+              stockErr.message
+            );
+          }
+        }
+
+        // Delete booking row
+        await client.query(
+          `DELETE FROM public.dbooking WHERE order_id = $1`,
+          [order_id]
+        );
+        console.log(`🗑️ Booking ${order_id} deleted`);
+      }
+    }
+
+    // 3. Delete quotation
+    await client.query(`DELETE FROM public.quotations WHERE est_id = $1`, [
+      est_id,
+    ]);
+
+    // 4. Delete PDF if exists
+    if (quotation.pdf && fs.existsSync(quotation.pdf)) {
+      try {
+        fs.unlinkSync(quotation.pdf);
+        console.log(`🗑️ Deleted PDF file: ${quotation.pdf}`);
+      } catch (fileErr) {
+        console.error(`⚠️ Could not delete PDF file:`, fileErr.message);
+      }
+    }
+
+    await client.query("COMMIT");
+
+    res.status(200).json({
+      message:
+        "Quotation (and booking if exists) deleted successfully, stock restored",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error in deleteQuotation:", err);
+    res.status(500).json({
+      message: "Failed to delete quotation",
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+};

@@ -1112,3 +1112,82 @@ exports.bookProduct = async (req, res) => {
     res.status(500).json({ message: "Failed to book product", error: err.message })
   }
 }
+function safeParseJSON(data) {
+  if (!data) return [];
+  if (typeof data === "object") return data; // already an object
+  try {
+    return JSON.parse(data);
+  } catch (err) {
+    console.warn("⚠️ Could not parse products JSON:", data);
+    return [];
+  }
+}
+
+exports.deleteBooking = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    if (!id || isNaN(id)) {
+      return res.status(400).json({ message: "Valid booking id is required" });
+    }
+
+    await client.query("BEGIN");
+
+    // 1. Get booking
+    const bookingRes = await client.query(
+      `SELECT id, order_id, products FROM public.dbooking WHERE id = $1`,
+      [id]
+    );
+
+    if (bookingRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const booking = bookingRes.rows[0];
+    const products = safeParseJSON(booking.products);
+
+    // 2. Try restoring stock (only if table exists)
+    for (const product of products) {
+      const { id: productId, product_type, quantity } = product;
+      if (!product_type || !productId || !quantity) continue;
+
+      const tableName = product_type.toLowerCase().replace(/\s+/g, "_");
+
+      try {
+        await client.query(
+          `UPDATE public.${tableName} SET stock = stock + $1 WHERE id = $2`,
+          [quantity, productId]
+        );
+      } catch (err) {
+        console.warn(`⚠️ Skipping stock restore: table ${tableName} does not exist`);
+      }
+    }
+
+    // 3. Delete booking
+    await client.query(`DELETE FROM public.dbooking WHERE id = $1`, [id]);
+
+    await client.query("COMMIT");
+
+    res.status(200).json({ message: "Booking deleted successfully" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error in deleteBooking:", err);
+    res.status(500).json({ message: "Failed to delete booking", error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// helper
+function safeParseJSON(data) {
+  if (!data) return [];
+  if (typeof data === "object") return data;
+  try {
+    return JSON.parse(data);
+  } catch (err) {
+    console.warn("⚠️ Could not parse products JSON:", data);
+    return [];
+  }
+}
