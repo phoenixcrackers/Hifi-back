@@ -16,5 +16,6 @@ router.patch("/product/:tableName/:id/book", DBookingController.bookProduct)
 router.get("/transactions/:bookingId", DBookingController.getTransactions)
 router.patch("/tracking/bookings/order/:order_id/status", DBookingController.updateBookingStatusByOrderId)
 router.get("/dispatch_logs/:order_id", DBookingController.getDispatchLogsByOrderId)
+router.get("/bookings/customer/:customer_name", DBookingController.getBookingsByCustomerName)
 
 module.exports = router

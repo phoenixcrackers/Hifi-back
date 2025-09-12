@@ -1191,3 +1191,26 @@ function safeParseJSON(data) {
     return [];
   }
 }
+
+exports.getBookingsByCustomerName = async (req, res) => {
+  try {
+    const { customer_name } = req.params;
+    if (!customer_name) {
+      return res.status(400).json({ message: "Customer name is required" });
+    }
+    const { rows } = await pool.query(
+      `SELECT id, order_id, customer_name, company_name, license_number, address, district, state, mobile_number, email,
+              products, status, created_at, pdf, remaining, admin, customer_type, customer_id, balance, amount_paid,
+              payment_date, amount_status, payment_method, admin_id, transaction_date, transport_type, transport_name,
+              transport_contact, lr_number, extra_charges, total, dispatched_qty, receipt_id
+       FROM public.dbooking
+       WHERE LOWER(customer_name) = LOWER($1)
+       ORDER BY created_at DESC`,
+      [customer_name]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("Error in getBookingsByCustomerName:", err.message);
+    res.status(500).json({ message: "Failed to fetch bookings", error: err.message });
+  }
+};
