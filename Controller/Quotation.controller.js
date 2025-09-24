@@ -35,8 +35,7 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
     doc.fontSize(12).font('Helvetica')
       .text('Hifi Pyro Park', 50, 80, { align: 'center' })
       .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
-      .text('Mobile: +91 63836 59214', 50, 110, { align: 'center' })
-      .text('Email: nivasramasamy27@gmail.com', 50, 125, { align: 'center' });
+      .text('Mobile: +91 97865 08621, +91 97868 60010', 50, 110, { align: 'center' });
 
     // Customer Details (Left and Right)
     doc.fontSize(12).font('Helvetica')
@@ -48,23 +47,36 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
       .text(`Customer Type: ${quotationData.customer_type || 'User'}`, 300, 190, { align: 'right' })
       .text(`Quotation ID: ${quotationData.est_id || 'N/A'}`, 300, 205, { align: 'right' });
 
+    // Check if any product has a non-zero discount
+    const hasDiscount = products.some(product => parseFloat(product.discount || 0) > 0);
+
     // Table Header
     const tableY = 250;
     const tableWidth = 500;
-    const colWidths = [50, 150, 80, 80, 60, 80]; // Sl No, Product, Quantity, Price, Per, Total
-    const colX = [50, 100, 250, 330, 410, 470];
+    const colWidths = hasDiscount
+      ? [50, 120, 80, 80, 60, 60, 80] // Sl No, Product, Quantity, Price, Discount, Per, Total
+      : [50, 150, 80, 80, 60, 80]; // Sl No, Product, Quantity, Price, Per, Total (no Discount)
+    const colX = hasDiscount
+      ? [50, 100, 220, 300, 380, 440, 470]
+      : [50, 100, 250, 330, 410, 470];
 
     // Draw table top border
     doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
 
     // Table Header
     doc.fontSize(10).font('Helvetica-Bold')
-      .text('Sl No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
-      .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'center' })
-      .text('Quantity', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
-      .text('Price', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'center' })
-      .text('Per', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'center' })
-      .text('Total', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'center' });
+      .text('Sl No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'left' })
+      .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'left' })
+      .text('Count', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'left' })
+      .text('Price', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'left' });
+    if (hasDiscount) {
+      doc.text('Disc', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
+        .text('Per', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'left' })
+        .text('Total', colX[6] + 5, tableY, { width: colWidths[6] - 10, align: 'left' });
+    } else {
+      doc.text('Per', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
+        .text('Total', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'left' });
+    }
 
     // Draw header bottom border
     doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
@@ -88,12 +100,18 @@ const generateQuotationPDF = (quotationData, customerDetails, products, extraCha
 
       // Draw row content
       doc.font('Helvetica')
-        .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
-        .text(product.productname || 'N/A', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'center' })
-        .text(product.quantity || 0, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
-        .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'center' })
-        .text(product.per || 'N/A', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'center' })
-        .text(`Rs.${productTotal.toFixed(2)}`, colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' });
+        .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'left' })
+        .text(product.productname || 'N/A', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+        .text(product.quantity || 0, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'left' })
+        .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' });
+      if (hasDiscount) {
+        doc.text(`${discount}%`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'left' })
+          .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+      } else {
+        doc.text(product.per || 'N/A', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text(`Rs.${productTotal.toFixed(2)}`, colX[5] + 5, y, { width: colWidths[5] - 10, align: 'left' });
+      }
 
       // Draw row bottom border
       doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
@@ -153,7 +171,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
     doc.fontSize(12).font('Helvetica')
       .text('Hifi Pyro Park', 50, 80, { align: 'center' })
       .text('Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi', 50, 95, { align: 'center' })
-      .text("Mobile: +91 97865 08621, +91 97868 60010", 50, 140, { align: "left" })
+      .text('Mobile: +91 97865 08621, +91 97868 60010', 50, 110, { align: 'center' });
 
     // Customer Details (Left and Right)
     doc.fontSize(12).font('Helvetica')
@@ -165,21 +183,36 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
       .text(`Customer Type: ${bookingData.customer_type || 'User'}`, 300, 190, { align: 'right' })
       .text(`Order ID: ${bookingData.order_id}`, 300, 205, { align: 'right' });
 
+    // Check if any product has a non-zero discount
+    const hasDiscount = products.some(product => parseFloat(product.discount || 0) > 0);
+
     // Table Header
     const tableY = 250;
     const tableWidth = 500;
-    const colWidths = [200, 100, 100, 100]; // Product, Quantity, Price, Total
-    const colX = [50, 250, 350, 450];
+    const colWidths = hasDiscount
+      ? [50, 120, 80, 80, 60, 60, 80] // Sl No, Product, Quantity, Price, Discount, Per, Total
+      : [50, 150, 80, 80, 60, 80]; // Sl No, Product, Quantity, Price, Per, Total (no Discount)
+    const colX = hasDiscount
+      ? [50, 100, 220, 300, 380, 440, 470]
+      : [50, 100, 250, 330, 410, 470];
 
     // Draw table top border
     doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
 
     // Table Header
     doc.fontSize(10).font('Helvetica-Bold')
-      .text('Product', colX[0] + 5, tableY)
-      .text('Quantity', colX[1] + 5, tableY)
-      .text('Price', colX[2] + 5, tableY)
-      .text('Total', colX[3] + 5, tableY);
+      .text('Sl No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'left' })
+      .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'left' })
+      .text('Count', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'left' })
+      .text('Price', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'left' });
+    if (hasDiscount) {
+      doc.text('Disc', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
+        .text('Per', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'left' })
+        .text('Total', colX[6] + 5, tableY, { width: colWidths[6] - 10, align: 'left' });
+    } else {
+      doc.text('Per', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
+        .text('Total', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'left' });
+    }
 
     // Draw header bottom border
     doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
@@ -203,10 +236,18 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
 
       // Draw row content
       doc.font('Helvetica')
-        .text(product.productname, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'left' })
-        .text(product.quantity, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
-        .text(`Rs.${price.toFixed(2)}`, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'left' })
-        .text(`Rs.${productTotal.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' });
+        .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'left' })
+        .text(product.productname || 'N/A', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+        .text(product.quantity, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'left' })
+        .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' });
+      if (hasDiscount) {
+        doc.text(`${discount}%`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'left' })
+          .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+      } else {
+        doc.text(product.per || 'N/A', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text(`Rs.${productTotal.toFixed(2)}`, colX[5] + 5, y, { width: colWidths[5] - 10, align: 'left' });
+      }
 
       // Draw row bottom border
       doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
@@ -232,7 +273,7 @@ const generateInvoicePDF = (bookingData, customerDetails, products, extraCharges
     if (pf > 0) extraChargesText += `P&F: Rs.${pf.toFixed(2)}  `;
     if (minus > 0) extraChargesText += `Deduction: -Rs.${minus.toFixed(2)}  `;
     if (extraChargesText) {
-      doc.font('Helvetica').text(extraChargesText.trim(), 50, y);
+      doc.font('Helvetica').text(extraChargesText.trim(), 400, y, { align: 'right' });
       y += 20;
     }
 
